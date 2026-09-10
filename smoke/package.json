@@ -1,0 +1,29 @@
+{
+  "name": "@cleargate/smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "supported": "tsx src/supported.ts",
+    "server": "tsx src/server.ts",
+    "client": "tsx src/client.ts",
+    "smoke": "tsx src/run.ts"
+  },
+  "dependencies": {
+    "@cleargate/types": "workspace:*",
+    "@hiero-ledger/sdk": "2.85.0",
+    "@x402/core": "2.25.0",
+    "@x402/express": "2.25.0",
+    "@x402/fetch": "2.25.0",
+    "@x402/hedera": "2.25.0",
+    "dotenv": "17.4.2",
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "22.20.2",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}
