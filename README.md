@@ -26,7 +26,15 @@ Milestones **M0** (payment spike) and **M1** (one node, one paid job):
 - A TypeScript renter CLI that signs Hedera payments, streams job output, and downloads results.
 - A smoke test that proves one real HBAR payment moves, kept green in CI.
 
-Registry, website, installer, metered leases and HCS receipts (M2–M5) are not built yet.
+Plus the discovery half of **M2**:
+
+- **A registry** (`registry/`): Fastify and Postgres, holding one row per node, updated by
+  heartbeats. It is discovery only — it never receives, holds or forwards funds.
+- **A website** (`web/`): a page that hands a provider their install command, and a page that lists
+  every node with its GPU, price and limits.
+- **An installer** (`scripts/install.sh`): builds the daemon, configures it, and starts it announcing.
+
+The rent-from-the-website flow, metered leases and HCS receipts (M3–M5) are not built yet.
 
 ---
 
@@ -136,6 +144,34 @@ the node runs in **CPU-fallback mode** — it says so loudly at startup and repo
 `cleargate-node tui` runs the same server with a live dashboard instead of log lines. `serve` stays
 the right command for a box running under systemd.
 
+### Get listed on the website
+
+The registry is discovery only: it records where nodes are, never a payment. Start it and the site:
+
+```sh
+make registry-db      # Postgres on :5433, in docker
+make dev-registry     # the registry on :4400
+make dev-web          # the website on :3000
+```
+
+Then open <http://localhost:3000/provide>, fill in the Hedera account you want to be paid into, and
+run the command it gives you on the machine with the GPU:
+
+```sh
+PAY_TO=0.0.1234 \
+  PRICE_TINYBARS=100000 \
+  PUBLIC_URL=http://localhost:8402 \
+  REGISTRY_URL=http://localhost:4400 \
+  ./scripts/install.sh
+```
+
+That builds the daemon, preflights Docker and the GPU, writes `config.yaml` and starts serving. The
+node announces itself immediately and every 30 seconds after, so it shows up at
+<http://localhost:3000/nodes> straight away — with its GPU, price, limits and payout account.
+
+Listing is opt-in. Leave `REGISTRY_URL` out and the node is simply unlisted: renters who know its
+URL can still pay it. A registry that is down never interrupts a paid job.
+
 ### Renting the GPU out for real
 
 The GPU path needs the NVIDIA Container Toolkit; the node checks for the `nvidia` runtime rather
@@ -203,6 +239,25 @@ Every endpoint states what authorizes it. New endpoints must do the same.
 Job tokens are 32 random bytes, minted at settlement, scoped to one job, and compared in constant
 time. An unknown job and a wrong token both answer 404: whether a job exists is not something an
 unauthorized caller gets to learn.
+
+### Registry API
+
+Discovery only. There is no payments table, no balance, and no route that moves money.
+
+| Method | Path | Authorization | Notes |
+|---|---|---|---|
+| `GET` | `/health` | free | liveness; what `setup` preflights against |
+| `POST` | `/v1/nodes/heartbeat` | node's listing token | upserts one node; the first beat claims the `node_id` |
+| `POST` | `/v1/nodes/:id/offline` | node's listing token | the node is stopping; go offline now |
+| `GET` | `/v1/nodes` | free | every node, online first; `?online=true` to filter |
+| `GET` | `/v1/nodes/:id` | free | one node |
+
+A node is `online` when it has not withdrawn and a heartbeat has landed within 90 seconds. Stopping
+a node with ctrl-c withdraws it immediately; the 90-second timeout is the backstop for a node that
+lost power without saying goodbye. Either way the row stays, listed as offline, and the node
+reclaims it on its next heartbeat. The listing token is minted by
+`cleargate-node setup`, and the registry stores only its SHA-256 — it exists so nobody can repoint
+an established listing at their own machine, and it can never authorize a payment.
 
 A job moves `pending → staging → running → succeeded | failed | timeout | killed`. `staging` is
 after payment and before the container runs — pulling the image, downloading the dataset — and it is

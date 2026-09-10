@@ -36,17 +36,46 @@ Built for the "AI & Agentic Payments on Hedera" hackathon track. Testnet only.
 ```
 agent/       Go — cleargate-node binary: x402 resource server, docker runner, dataset staging, TUI
 client/      TS — payFor() 402 wrapper, cleargate CLI, budgeting agent (M4)
-registry/    TS — Fastify + Postgres, enrollment and heartbeats (M2)
-web/         Next.js — provider signup, node browsing, rent flow (M2)
+registry/    TS — Fastify + Postgres, node heartbeats and discovery (M2)
+web/         Next.js — provider signup and node browsing (M2); rent flow still to come
 packages/    shared TS types (payment requirements, node specs, job specs)
-scripts/     install.sh — the provider one-liner (M2)
+scripts/     install.sh — the provider one-liner
 smoke/       the minimal end-to-end payment test; keep it green
 examples/    job scripts: hello, train, train_mnist (GPU), and the sandbox negative tests
 docs/
 ```
 
-Built so far: **M0** (payment spike) and **M1** (one node, one paid job). `registry/`, `web/`
-and `scripts/` do not exist yet.
+Built so far: **M0** (payment spike), **M1** (one node, one paid job) and the discovery half of
+**M2** (registry, provider signup, node listing).
+
+## Discovery
+
+A node announces itself; the registry never goes looking. `cleargate-node serve` POSTs a heartbeat
+to `{registry_url}/v1/nodes/heartbeat` every 30s. Push, not poll, because a provider's box is
+usually behind NAT and a registry could not dial it.
+
+**A node is `online` when it has not withdrawn *and* its last beat is under 90s old.** The two
+halves cover different failures and both are needed: on shutdown the node POSTs
+`/v1/nodes/{id}/offline` so the site stops offering it immediately, and the 90s timeout catches the
+node that lost power and never got to say anything. Withdrawal is cleared by the next heartbeat.
+Without the explicit withdrawal a provider presses ctrl-c and watches themselves advertised as
+available for another minute and a half, which reads as the site ignoring them.
+
+A withdrawn node keeps its row. A renter looking for a node they used yesterday should find it
+listed as offline rather than silently vanished.
+
+- **Listing is opt-in and failure is silent.** No `registry_url` in `config.yaml` means the node is
+  simply unlisted; renters who know its URL still pay it normally. A registry that is down logs a
+  warning and nothing else — it must never interrupt a paid job.
+- **A node owns its listing by trust-on-first-use.** `setup` mints a `registry_token`; the first
+  heartbeat for a `node_id` records its hash, and later beats must match. Without this, anyone could
+  repoint an established listing at their own machine and collect jobs meant for someone else's GPU.
+  It is a listing credential only — it cannot move funds, and the node still holds no Hedera key.
+- **`public_url` is validated as an absolute http(s) URL at the registry boundary**, because the
+  website renders it as a link and a hostile node would otherwise have script injection against
+  every visitor.
+- `nodespec.Build` is the single source of both `GET /v1/specs` and the heartbeat body, so the two
+  cannot drift.
 
 ## Payment shapes
 
@@ -116,6 +145,9 @@ make supported      # check the facilitator still advertises hedera:testnet
 make agent          # build the cleargate-node binary
 make dev-node       # run an agent locally, headless (what systemd runs)
 make dev-tui        # run an agent locally with the provider dashboard
+make registry-db    # start the registry's Postgres in docker
+make dev-registry   # run the discovery registry on :4400
+make dev-web        # run the website on :3000
 make cli ARGS="…"   # the renter CLI from the repo root
 make test           # go tests, including real-Docker sandbox tests
 make typecheck      # typecheck every TS package

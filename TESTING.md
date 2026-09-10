@@ -113,6 +113,63 @@ cleargate quote --node http://localhost:8402
 `gpu.available` must be `false` on a box without the NVIDIA container runtime. A node claiming a GPU
 it cannot pass through is the worst failure mode this project has, so this is a real assertion.
 
+## 4b. Getting listed on the website — free
+
+Discovery only: no payment happens anywhere in this section, and the registry never holds funds.
+
+```sh
+make registry-db        # Postgres on :5433, in docker
+make dev-registry       # terminal C — the registry on :4400
+make dev-web            # terminal D — the website on :3000
+```
+
+Open <http://localhost:3000/provide>, enter the account you want paid, and run the command it gives
+you from the repo root. Stop the node from step 3 first — the install script starts its own:
+
+```sh
+PAY_TO=0.0.YOUR_ACCOUNT \
+  PRICE_TINYBARS=100000 \
+  PUBLIC_URL=http://localhost:8402 \
+  REGISTRY_URL=http://localhost:4400 \
+  ./scripts/install.sh
+```
+
+**Pass:** setup prints `registry  http://localhost:4400`, the node starts, and
+<http://localhost:3000/nodes> shows it as **available** with its GPU, price and limits within a
+couple of seconds. `curl -s localhost:4400/v1/nodes` shows the same row with `"online": true`.
+
+Three things to assert, all of which have already been wrong once:
+
+```sh
+# A node's listing cannot be stolen: a second beat with a different token is refused.
+curl -s -X POST localhost:4400/v1/nodes/heartbeat \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer attacker' \
+  -d "$(curl -s localhost:8402/v1/specs | python3 -c 'import json,sys; s=json.load(sys.stdin); s.update(public_url="http://evil.example", paused=False); print(json.dumps(s))')"
+# -> 403 this node_id is registered to a different token
+
+# The registry is not a rendering hazard: a non-http URL never reaches the page.
+curl -s -X POST localhost:4400/v1/nodes/heartbeat \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer whatever' \
+  -d '{"node_id":"node_x","public_url":"javascript:alert(1)"}'
+# -> 400 expected an absolute http(s) URL
+
+# Nobody else can delist you either: withdrawal needs the same token.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:4400/v1/nodes/NODE_ID/offline \
+  -H 'Authorization: Bearer attacker'
+# -> 403
+```
+
+Now press ctrl-c on the node. **Pass:** its log ends with `withdrawn from the registry`, and
+`/nodes` shows it **offline** on the very next refresh — not ninety seconds later. Start it again
+and it returns to `available`. The row itself stays either way: a renter looking for a node they
+used yesterday should find it listed as offline rather than silently gone.
+
+`kill -9` on the node skips the goodbye, which is the case the freshness window exists for: it
+reads `available` until 90 seconds after its last heartbeat, then flips to `offline`.
+
+Then stop the registry and confirm the node keeps working: `cleargate quote` still answers and a paid
+job still runs. A registry outage must never interrupt selling compute.
+
 ## 5. The 402 challenge — terminal B, free
 
 ```sh
