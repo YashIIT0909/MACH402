@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# go build output — anchored, so client/bin/ (the cleargate launcher) is kept
+/bin/
+/agent/bin/
+
+# runtime state
+receipts.jsonl
+config.yaml
+cleargate-node.log
+*.tar
+artifacts/
