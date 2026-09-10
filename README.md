@@ -11,7 +11,7 @@ Built for the *AI & Agentic Payments on Hedera* track. **Testnet only.**
 
 ---
 
-## What works today
+## What works currently
 
 Milestones **M0** (payment spike) and **M1** (one node, one paid job):
 
