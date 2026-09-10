@@ -17,6 +17,11 @@ export type NodeSpec = {
   network: string;
   /** Asset id: "0.0.0" for HBAR, or an HTS token id. */
   asset: string;
+  /**
+   * The facilitator's fee payer, echoed so a client can pre-build a payment
+   * without first triggering a 402. Absent when the facilitator was unreachable.
+   */
+  fee_payer?: string;
   gpu: GpuInfo;
   limits: JobLimits;
   /** Images this node is willing to run. Untrusted images are never accepted. */
@@ -33,6 +38,29 @@ export type GpuInfo = {
   vram_mb: number | null;
   /** Why the GPU is unavailable, for operator diagnostics. */
   reason?: string;
+};
+
+/**
+ * What a node POSTs to the registry's `/v1/nodes/heartbeat` on a timer.
+ *
+ * It is the node's own `NodeSpec` plus the two things only the node knows:
+ * where renters can reach it, and whether its operator has it paused.
+ */
+export type NodeHeartbeat = NodeSpec & {
+  /** Absolute base URL renters use to reach this node, e.g. https://gpu.example. */
+  public_url: string;
+  /** True while the operator has the node refusing new jobs. */
+  paused: boolean;
+};
+
+/** A node as the registry hands it back to the website. */
+export type NodeListing = NodeHeartbeat & {
+  /** True when the last heartbeat arrived inside the registry's freshness window. */
+  online: boolean;
+  /** ISO 8601 timestamp of the most recent heartbeat. */
+  last_seen_at: string;
+  /** ISO 8601 timestamp of the first heartbeat ever seen from this node. */
+  first_seen_at: string;
 };
 
 export type JobLimits = {
