@@ -1,0 +1,27 @@
+{
+  "name": "@cleargate/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cleargate": "./bin/cleargate.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@cleargate/types": "workspace:*",
+    "@hiero-ledger/sdk": "2.85.0",
+    "@x402/core": "2.25.0",
+    "@x402/fetch": "2.25.0",
+    "@x402/hedera": "2.25.0",
+    "commander": "15.0.0",
+    "dotenv": "17.4.2",
+    "tsx": "4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3"
+  }
+}
