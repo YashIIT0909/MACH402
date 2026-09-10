@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
@@ -124,54 +125,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 // handleSpecs is free: discovery must not cost money, or agents cannot shop.
 func (s *Server) handleSpecs(w http.ResponseWriter, r *http.Request) {
-	gpu := s.runner.GPU()
+	writeJSON(w, http.StatusOK, s.Spec(r.Context()))
+}
 
-	spec := map[string]any{
-		"node_id":         s.cfg.NodeID,
-		"agent_version":   s.version,
-		"pay_to":          s.cfg.PayTo,
-		"price_tinybars":  s.cfg.PriceTinybars,
-		"facilitator_url": s.cfg.FacilitatorURL,
-		"network":         s.cfg.Network,
-		"asset":           s.cfg.Asset,
-		"image_allowlist": s.cfg.ImageAllowlist,
-		"gpu": map[string]any{
-			"available": gpu.Available,
-			"model":     nullableString(gpu.Model),
-			"vram_mb":   nullableInt(gpu.VRAMMb),
-			"reason":    nullableString(gpu.Reason),
-		},
-		"limits": map[string]any{
-			"max_seconds":     s.cfg.Limits.MaxSeconds,
-			"memory_mb":       s.cfg.Limits.MemoryMB,
-			"cpu_cores":       s.cfg.Limits.CPUCores,
-			"max_artifact_mb": s.cfg.Limits.MaxArtifactMB,
-		},
-	}
-
-	// Advertise the fee payer too, so a client can pre-build a payment without
-	// first triggering a 402.
-	if kind, err := s.fac.Kind(r.Context(), x402.SchemeExact, s.cfg.Network); err == nil {
-		if feePayer, ok := kind.FeePayer(); ok {
-			spec["fee_payer"] = feePayer
+// Spec is the node's description of itself, as served from /v1/specs and sent
+// to the registry. A fee payer the facilitator cannot confirm is left out
+// rather than guessed: it must match /supported or the client SDK throws
+// before signing (CLAUDE.md invariant 5).
+func (s *Server) Spec(ctx context.Context) nodespec.Spec {
+	feePayer := ""
+	if kind, err := s.fac.Kind(ctx, x402.SchemeExact, s.cfg.Network); err == nil {
+		if advertised, ok := kind.FeePayer(); ok {
+			feePayer = advertised
 		}
 	}
-
-	writeJSON(w, http.StatusOK, spec)
+	return nodespec.Build(s.cfg, s.version, feePayer, s.runner.GPU())
 }
 
-func nullableString(s string) any {
-	if s == "" {
-		return nil
+// Heartbeat is what this node tells the registry about itself. The registry is
+// discovery only and never touches money (CLAUDE.md invariant 3), so this
+// carries no payment authority — just an address and a spec.
+func (s *Server) Heartbeat(ctx context.Context) nodespec.Heartbeat {
+	return nodespec.Heartbeat{
+		Spec:      s.Spec(ctx),
+		PublicURL: strings.TrimRight(s.cfg.PublicURL, "/"),
+		Paused:    s.Paused(),
 	}
-	return s
-}
-
-func nullableInt(n int) any {
-	if n == 0 {
-		return nil
-	}
-	return n
 }
 
 // newJobID returns a short, unguessable job identifier.
