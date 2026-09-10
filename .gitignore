@@ -11,6 +11,10 @@ dist/
 /bin/
 /agent/bin/
 
+# next.js
+.next/
+next-env.d.ts
+
 # runtime state
 receipts.jsonl
 config.yaml
