@@ -50,6 +50,17 @@ type Config struct {
 	// Empty means derive it from the incoming request.
 	PublicURL string `yaml:"public_url"`
 
+	// RegistryURL is the ClearGate registry this node announces itself to, so
+	// it appears on the website. Empty means "do not announce": a node is fully
+	// functional unlisted, and renters who know its URL can still pay it.
+	RegistryURL string `yaml:"registry_url"`
+
+	// RegistryToken proves to the registry that this node owns its listing, so
+	// nobody else can repoint node_id at their own machine and collect jobs
+	// meant for this one. It is a listing credential, not key material: it
+	// cannot move funds, and the node still holds no Hedera key.
+	RegistryToken string `yaml:"registry_token"`
+
 	// GPUEnabled asks for GPU passthrough. The runner still refuses unless the
 	// nvidia container runtime is actually present, and falls back to CPU.
 	GPUEnabled bool `yaml:"gpu_enabled"`
@@ -205,6 +216,16 @@ func (c Config) Validate() error {
 	}
 	if len(c.ImageAllowlist) == 0 {
 		return errors.New("image_allowlist is empty — the node would refuse every job")
+	}
+	if c.RegistryURL != "" {
+		// A listing renters cannot dial is worse than no listing at all: the
+		// registry has nowhere to send them, so refuse to publish one.
+		if c.PublicURL == "" {
+			return errors.New("public_url must be set when registry_url is — the registry has to tell renters where to reach this node")
+		}
+		if c.RegistryToken == "" {
+			return errors.New("registry_token must be set when registry_url is — re-run `cleargate-node setup` to generate one")
+		}
 	}
 	if c.Limits.MaxSeconds <= 0 || c.Limits.MemoryMB <= 0 || c.Limits.CPUCores <= 0 {
 		return errors.New("limits.max_seconds, limits.memory_mb and limits.cpu_cores must all be positive")

@@ -68,6 +68,9 @@ func runTUI(parent context.Context, configPath string) error {
 
 	server := httpapi.New(cfg, run, fac, log, version)
 
+	stopAnnouncing := announce(ctx, cfg, server, log)
+	defer stopAnnouncing()
+
 	// Seed the dashboard from the receipt log so a restart does not appear to
 	// reset the provider's earnings.
 	earned, settlements := priorEarnings(cfg.ReceiptsPath)

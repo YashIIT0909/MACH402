@@ -53,6 +53,43 @@ func TestValidateRejectsEmptyAllowlist(t *testing.T) {
 	}
 }
 
+// A node with no registry_url is unlisted, not misconfigured: renters who know
+// its URL still pay it directly.
+func TestValidateAllowsAnUnlistedNode(t *testing.T) {
+	cfg := validConfig()
+	cfg.RegistryURL = ""
+	cfg.PublicURL = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an unlisted node should be valid: %v", err)
+	}
+}
+
+// Publishing a listing renters cannot dial is worse than publishing none.
+func TestValidateRejectsListingWithoutAnAddressOrToken(t *testing.T) {
+	cfg := validConfig()
+	cfg.RegistryURL = "http://localhost:4400"
+	cfg.RegistryToken = "token"
+	cfg.PublicURL = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("registry_url without public_url should be rejected")
+	}
+	if !strings.Contains(err.Error(), "public_url") {
+		t.Fatalf("error should name public_url, got: %v", err)
+	}
+
+	cfg.PublicURL = "http://localhost:8402"
+	cfg.RegistryToken = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("registry_url without registry_token should be rejected")
+	}
+
+	cfg.RegistryToken = "token"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a fully configured listing should be valid: %v", err)
+	}
+}
+
 func TestAllowsImageMatchesExactly(t *testing.T) {
 	cfg := validConfig()
 	cfg.ImageAllowlist = []string{"python:3.11-slim"}
