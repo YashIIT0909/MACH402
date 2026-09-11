@@ -1,3 +1,5 @@
+import type { LeaseOffer } from "./lease.js";
+
 /**
  * What a provider node advertises about itself. Returned free from
  * `GET /v1/specs`, and (from M2) mirrored into the registry by heartbeats.
@@ -26,6 +28,14 @@ export type NodeSpec = {
   limits: JobLimits;
   /** Images this node is willing to run. Untrusted images are never accepted. */
   image_allowlist: string[];
+  /**
+   * Timed interactive access, if this node sells it.
+   *
+   * Absent on a node that did not opt in — which is the default, because
+   * handing a stranger a live shell is a bigger trust ask than running their
+   * sandboxed batch job and must never be switched on as a side effect.
+   */
+  leases?: LeaseOffer;
 };
 
 export type GpuInfo = {
