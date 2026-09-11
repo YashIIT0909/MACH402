@@ -34,7 +34,19 @@ Plus the discovery half of **M2**:
   every node with its GPU, price and limits.
 - **An installer** (`scripts/install.sh`): builds the daemon, configures it, and starts it announcing.
 
-The rent-from-the-website flow, metered leases and HCS receipts (M3–M5) are not built yet.
+And the metered half of **M3**, **interactive leases** — the other way to buy compute here:
+
+- **`POST /v1/leases`**: pay by the minute for an SSH shell and a Jupyter server in a container on
+  the provider's GPU. Nothing of the renter's is uploaded; their code and data stay on their machine.
+- **Certificate access, no credential exchange.** The renter generates a keypair locally and sends
+  only the public half; the node's own CA signs it for one lease, expiring when the paid time does.
+- **A tunnel out of NAT** (`cloudflared`, run by the node), so a provider needs no public IP and no
+  port forwarding — and no Cloudflare account: the registry provisions it for them, or they use a
+  quick tunnel and need no account either.
+- **Freeze, then reap.** Missed extensions freeze the container rather than killing it, so a renter
+  who is mid-run and slow to pay does not lose their work.
+
+The rent-from-the-website flow and HCS receipts (M4–M5) are not built yet.
 
 ---
 
@@ -190,6 +202,61 @@ docker pull pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
 Then set `gpu_enabled: true` and restart. `cleargate quote` will show the card instead of
 `CPU-fallback mode`.
 
+### Selling interactive access too
+
+Separate from the GPU flag, and separate on purpose: handing a stranger a live shell is a bigger ask
+than running their sandboxed batch job, so it never rides along with anything else.
+
+```sh
+LEASES=1 GPU=1 PAY_TO=0.0.1234 REGISTRY_URL=http://localhost:4400 \
+  bash scripts/install.sh
+```
+
+That adds three things to the install: `cloudflared` (fetched for you), a check that `ssh-keygen`
+exists, and a build of the lease images — which is slow, and only happens once.
+
+By hand instead of through the installer:
+
+```sh
+make lease-image
+./bin/cleargate-node setup --enable-leases --tunnel-mode quick --pay-to 0.0.1234 --force
+```
+
+`make lease-image` picks its base from what the machine has: the CUDA base where
+the `nvidia` runtime is installed, a plain Python base otherwise. That is not a
+convenience — passing a GPU into a container with no CUDA toolkit produces a lease
+where `nvidia-smi` lists the card and every kernel launch fails, which is worse
+than selling CPU honestly. The node checks the image and **refuses to sell
+`require_gpu` leases on a CUDA-less one**, says so at `setup`, and advertises
+`leases.gpu: false` so a renter sees it before paying. Override with
+`LEASE_BASE_IMAGE=…` if you want a specific base.
+
+The CUDA base makes this a **PyTorch** box, and that is the whole of it. Torch sees
+the GPU immediately; **TensorFlow cannot be made to, on this base, by any means we
+measured** — `tensorflow`, `tensorflow[and-cuda]`, and a separate virtualenv all end
+at `Cannot dlopen some GPU libraries` and fall back to CPU, because TF's CUDA wheels
+and the ones torch pins cannot coexist. It is a property of the image rather than
+something a renter can debug their way out of, so the container's MOTD says so
+plainly instead of letting them burn paid minutes on it.
+
+A provider who expects TensorFlow renters should change the base rather than add
+packages to this one:
+
+```sh
+make lease-image LEASE_BASE_IMAGE=tensorflow/tensorflow:2.17.0-gpu
+```
+
+`LEASE_EXTRA_PIP="…"` bakes additional packages into whichever base you pick.
+
+`--tunnel-mode quick` needs no Cloudflare account at all and gives renters Jupyter over a random
+hostname. `--tunnel-mode named` asks the registry to provision a stable tunnel for the node, which
+is what adds an SSH terminal — and needs a registry that has Cloudflare credentials configured.
+
+Setup generates this node's SSH certificate authority under `lease-ca`, beside `config.yaml`. The
+private half never leaves the machine and is never copied anywhere, the same rule that keeps this
+binary free of a Hedera key. Do not delete it while leases are live: every certificate already
+issued would stop working.
+
 ### Rent from it
 
 Everything runs from the repo root:
@@ -220,6 +287,40 @@ cleargate run \
 
 `quote` is free. `run` pays, streams the container's output live, and downloads the artifact.
 
+### Rent a shell instead
+
+`run` sends your code to the node. `rent` sends nothing — you get a shell and a Jupyter server on
+the provider's GPU for the minutes you buy, and your code and data never leave your machine.
+
+The provider has to have opted in (`LEASES=1` at install), and `cleargate quote` says whether they
+did.
+
+```sh
+cleargate rent --node http://localhost:8402 --minutes 30 --budget 50000000
+```
+
+That prints an `ssh` command and a URL to paste into Colab's **Connect to a local runtime**, then
+holds the lease open by buying another slice before each one lapses — stopping when your `--budget`
+would be passed. Ctrl-c stops the lease and stops paying.
+
+Two things are worth knowing before you rent:
+
+- **You get a root shell in a container, and it has a network — but an allowlisted one.** `pip`,
+  `conda`, `npm`, GitHub and Hugging Face work; arbitrary hosts do not. `cleargate quote` prints the
+  node's list.
+- **Check `leases.gpu`, not `gpu.available`.** The first says a lease container can compute on the
+  card; the second only says the host has one. They differ when a provider built their lease image
+  without CUDA, and `--gpu` refuses that node before you pay. PyTorch is preinstalled and ready;
+  TensorFlow does not work on the GPU on a PyTorch-based lease image at all, by any route we
+  measured — check what the node runs before renting for a TF workload.
+- **SSH depends on how the provider's tunnel is set up.** A node on a *named* tunnel gives you both
+  a terminal and Jupyter. A node on a *quick* tunnel — the zero-setup option, no Cloudflare account
+  — gives you Jupyter only. The quote and the rent output both say which.
+
+The certificate you get back is valid only for that lease, only until its paid time runs out. There
+is no key to revoke and nothing to clean up: extending re-signs a new one, and letting a lease lapse
+is how it ends.
+
 ---
 
 ## Node API
@@ -235,10 +336,23 @@ Every endpoint states what authorizes it. New endpoints must do the same.
 | `GET` | `/v1/jobs/:id/logs` | job token | `?follow=1` for an SSE stream |
 | `GET` | `/v1/jobs/:id/artifact` | job token | the output directory as a tar |
 | `POST` | `/v1/jobs/:id/stop` | job token | kill early |
+| `POST` | `/v1/leases` | **x402** | buy interactive time, priced per minute. `404` on a node that did not opt into leasing |
+| `POST` | `/v1/leases/:id/extend` | **x402** + lease token | buy another slice; re-signs the certificate with the later expiry |
+| `GET` | `/v1/leases/:id` | lease token | status and seconds remaining — free, because it is what decides whether to pay again |
+| `POST` | `/v1/leases/:id/stop` | lease token | end the lease and stop the meter |
 
-Job tokens are 32 random bytes, minted at settlement, scoped to one job, and compared in constant
-time. An unknown job and a wrong token both answer 404: whether a job exists is not something an
-unauthorized caller gets to learn.
+Access tokens are 32 random bytes, minted at settlement, scoped to one job or one lease, and
+compared in constant time. An unknown id and a wrong token both answer 404: whether a job or a lease
+exists is not something an unauthorized caller gets to learn.
+
+`POST /v1/leases` settles **after** a reachability check, not before: verify, start the container,
+sign the certificate, point the tunnel at it, prove the tunnel actually answers, *then* settle. A
+renter is never charged for a lease that never came up. That is also why the lease image has to be
+built before the node sells anything (`make lease-image`) — unlike a job, there is no `staging`
+phase to hide an image pull in.
+
+A lease moves `provisioning → active → paused → active`, and out through `stopped`, `expired` or
+`failed`. `paused` is a cgroup freeze, not a kill.
 
 ### Registry API
 
@@ -249,6 +363,7 @@ Discovery only. There is no payments table, no balance, and no route that moves 
 | `GET` | `/health` | free | liveness; what `setup` preflights against |
 | `POST` | `/v1/nodes/heartbeat` | node's listing token | upserts one node; the first beat claims the `node_id` |
 | `POST` | `/v1/nodes/:id/offline` | node's listing token | the node is stopping; go offline now |
+| `POST` | `/v1/nodes/:id/tunnel-token` | node's listing token | provisions this node's Cloudflare tunnel and DNS routes; `503` if this registry has no Cloudflare account |
 | `GET` | `/v1/nodes` | free | every node, online first; `?online=true` to filter |
 | `GET` | `/v1/nodes/:id` | free | one node |
 
@@ -263,6 +378,14 @@ A job moves `pending → staging → running → succeeded | failed | timeout | 
 after payment and before the container runs — pulling the image, downloading the dataset — and it is
 reported in `JobState.stage` and streamed over the same log feed, so a paid job is never silently
 stalled.
+
+The tunnel route is the only place Cloudflare credentials are ever used, and they live in the
+registry's environment (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`,
+`LEASE_DOMAIN` — see `registry/.env.example`). A provider never has a Cloudflare account and never
+sees anything but a token good for running their own one tunnel. Leave those variables unset and the
+registry still works: it answers 503 there, and nodes fall back to quick tunnels, which need no
+account at all. This does not put the registry in the payment path — it hands out a network route,
+and renters still pay nodes directly.
 
 ---
 
@@ -282,6 +405,35 @@ Untrusted code runs only in an allowlisted image, and:
 Arbitrary user-supplied images are deliberately out of scope. Jobs do run as root *inside* the
 container — there is no user-namespace remapping yet, which is a known residual risk rather than
 something the tests cover.
+
+### The lease sandbox, and where it differs
+
+A lease cannot be `NetworkMode: none` — a renter with a shell has to be able to install a package —
+and it cannot have a read-only root for the same reason. Those two are the *only* relaxations, and
+what replaces them is stricter rather than looser:
+
+- **The container has no route off the machine.** It sits on a Docker network created with
+  `Internal: true`. There is nothing to reach.
+- **The one way out is a proxy that denies by default.** `cleargate-egress` is the single container
+  dual-homed on that network and the outside, it is built from source in this repo
+  (`agent/lease-image/egress`), and it allows package and model registries and nothing else. A
+  renter can unset `HTTP_PROXY` and gain nothing, because there is no second path to find. The
+  allowlist is matched on domain boundaries, so `notgithub.com` does not pass as `github.com`.
+- **Every capability is dropped** except the handful `sshd` needs to accept a login, plus
+  `no-new-privileges`, memory, CPU and PID caps.
+- **Nothing survives the lease.** The workspace volume, both containers and the whole network are
+  destroyed at reap.
+
+Leases run as root inside the container, deliberately — a rented dev box where `apt-get` does not
+work is not a usable one — which makes user-namespace remapping matter more here than it does for
+jobs. The installer says so, and points at Docker's `userns-remap`.
+
+Access is by certificate and nothing else. The container's `sshd` has no `authorized_keys` file: it
+trusts one CA (the node's own, generated locally at setup, private half never copied anywhere) and
+accepts one principal (the lease id). A certificate minted for a different lease on the same node is
+signed by the same CA and still refused. Certificates expire when the paid time does, which is why
+there is no revocation list — a force-stopped lease has its container killed, so there is nothing
+left for a valid certificate to authenticate against.
 
 ### Datasets, and why the node downloads them
 
@@ -330,7 +482,8 @@ checks through a real paid job to the sandbox tests. Every command in it runs fr
 
 ```sh
 make typecheck    # every TS package
-make test         # go tests, including real-Docker sandbox tests
+make test         # go tests, including real-Docker sandbox tests and the egress allowlist
+make lease-image  # the lease runtime and its egress proxy
 make smoke        # live payment against testnet — run before every PR
 make smoke-agent  # pay the running Go agent with the official TS client
 ```

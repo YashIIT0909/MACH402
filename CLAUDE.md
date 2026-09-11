@@ -28,17 +28,28 @@ Built for the "AI & Agentic Payments on Hedera" hackathon track. Testnet only.
 6. **Untrusted code runs only in the allowlisted-image sandbox**: `--network=none`, resource caps, wall-clock timeout, volume wiped after download. Never widen this to accept arbitrary user images without an explicit decision recorded here.
    - **The container never gets network access, not even for datasets.** A renter supplies a dataset *URL*; the node downloads it and mounts it at `/data`. If you find yourself giving a job container a network so it can fetch something, stop — that is the invariant, not an inconvenience.
    - **Dataset URLs are fetched from inside the provider's network on behalf of a stranger**, so `internal/fetch` blocks loopback, link-local (cloud metadata), private and CGNAT addresses, and re-checks **every redirect hop**. Archives are extracted host-side with path-escape and symlink refusal. Weakening any of this is a vulnerability, not a simplification.
-7. **The agent API is versioned (`/v1/...`) and old versions keep working.** Nodes update on their own schedule; the registry records `agent_version`.
-8. **Flat-fee job mode stays functional** behind a config flag even after metered leasing lands. It is the demo fallback.
+   - **Lease containers are the one recorded exception, and only in the ways an interactive session forces.** This is that explicit decision. A lease (`POST /v1/leases`) hands a paying stranger a shell, so `--network=none` and a read-only root are both impossible — a renter has to be able to `pip install`. What replaces them is stricter, not looser, and all four parts are load-bearing:
+     1. the container sits on a Docker network created with `Internal: true`, so it has **no route off the host at all**;
+     2. the only thing dual-homed on that network is `cleargate-egress`, a proxy built from source in this repo (`agent/lease-image/egress`) that **denies by default** and allows only package and model registries. A renter can unset `HTTP_PROXY` and gain nothing: there is no other path out to find;
+     3. every capability is dropped except the handful `sshd` needs to accept a login, plus `no-new-privileges`. Providers are directed to user-namespace remapping so in-container root is not host root;
+     4. the workspace volume and the whole network are destroyed at reap.
+
+     The lease image itself is still not arbitrary — it is one image the node built, named in `leases.image`.
+7. **A lease's access is a certificate, never a key.** The renter generates a keypair on their machine and sends only the public half; the node's own CA (`internal/sshca`, private key node-local, generated at `setup --enable-leases`) signs it with `principal = lease_id` and `ValidBefore = expires_at`. Extending re-signs a fresh certificate rather than mutating the old one, so **expiry is the revocation mechanism** and nothing needs actively revoking in the normal case. Neither side ever holds the other's secret — the same rule as the node never holding a Hedera key.
+8. **The agent API is versioned (`/v1/...`) and old versions keep working.** Nodes update on their own schedule; the registry records `agent_version`.
+9. **Flat-fee job mode stays functional** behind a config flag even after metered leasing lands. It is the demo fallback. Equally, **leasing is opt-in per provider** (`setup --enable-leases`, `LEASES=1`) and must never be switched on as a side effect of anything else — a node that did not opt in answers 404 on `/v1/leases` and behaves exactly as it did before leases existed.
 
 ## Layout
 
 ```
 agent/       Go — cleargate-node binary: x402 resource server, docker runner, dataset staging, TUI
+  internal/sshca/       the node's own SSH CA: per-lease certificates, private key never leaves
+  internal/tunnel/      cloudflared supervision — how a renter reaches a lease through NAT
+  lease-image/          the lease runtime (sshd + Jupyter) and its deny-by-default egress proxy
 client/      TS — payFor() 402 wrapper, cleargate CLI, budgeting agent (M4)
-registry/    TS — Fastify + Postgres, node heartbeats and discovery (M2)
+registry/    TS — Fastify + Postgres, node heartbeats, discovery (M2), tunnel provisioning
 web/         Next.js — provider signup and node browsing (M2); rent flow still to come
-packages/    shared TS types (payment requirements, node specs, job specs)
+packages/    shared TS types (payment requirements, node specs, job specs, lease specs)
 scripts/     install.sh — the provider one-liner
 smoke/       the minimal end-to-end payment test; keep it green
 examples/    job scripts: hello, train, train_mnist (GPU), and the sandbox negative tests
@@ -143,6 +154,7 @@ make smoke          # end-to-end payment test against testnet — run before eve
 make smoke-agent    # pay the local Go agent with the official TS client
 make supported      # check the facilitator still advertises hedera:testnet
 make agent          # build the cleargate-node binary
+make lease-image    # build the lease runtime + egress proxy (required before a node sells leases)
 make dev-node       # run an agent locally, headless (what systemd runs)
 make dev-tui        # run an agent locally with the provider dashboard
 make registry-db    # start the registry's Postgres in docker
@@ -166,6 +178,54 @@ pending -> staging -> running -> succeeded | failed | timeout | killed
 `staging` is after payment and before the container runs: pulling the image, downloading the
 dataset, uploading it into `/data`. It is reported in `JobState.stage` and streamed to the renter
 over the same SSE log feed, so a paid job is never silently paused.
+
+## The lease lifecycle
+
+```
+provisioning -> active -> paused -> active
+                     \         \-> expired
+                      \-> stopped | failed
+```
+
+A lease is the inverse trade of a job: nothing of the renter's is uploaded, and instead they get a
+shell and a Jupyter server on the provider's GPU for the minutes they bought. One active lease per
+node in V1.
+
+- **`POST /v1/leases` settles only after a reachability check.** The order is verify → start the
+  container → sign the certificate → point the tunnel at it → *prove it answers* → settle. A renter
+  is never charged for a lease that never came up. This is why the lease image must already be on
+  the box (checked before the 402): there is no `staging` phase to hide an image pull in, and the
+  signed payload expires at `maxTimeoutSeconds`.
+- **Two missed extensions freeze, they do not kill.** `docker pause` — the cgroup freezer — so a
+  renter who is mid-run and slow to pay gets their session back when they extend. A grace period
+  after that reaps: container killed, tunnel ingress withdrawn, workspace wiped.
+- **Extending buys a slice and re-signs.** `POST /v1/leases/:id/extend` is 402-gated the same way
+  and issues a new certificate with the later expiry; the old one lapses on its own.
+- **Stopping does not refund.** Forward payment is what makes escrow unnecessary. What stopping does
+  is end the meter, which is what the renter actually wants and what frees the node for the next one.
+- **The renter's `--budget` is enforced client-side**, in `holdLease`, and is a different mechanism
+  from the node's freeze/reap timers: one protects the renter from overspending, the other protects
+  the provider from an unpaid container.
+
+- **A GPU on the host is not a GPU in a lease.** `runner.LeaseGPU()` is `gpu.Available` *and* the
+  lease image carrying a CUDA runtime, checked from the image's declared env at startup. A node with
+  a working card and a `python:3.11-slim`-based lease image gives a renter a container where
+  `nvidia-smi` lists the device and every kernel launch fails. So `require_gpu` is refused before the
+  402, `LeaseOffer.GPU` advertises the narrow answer, and `make lease-image` picks its base from
+  whether the `nvidia` runtime is present rather than from the provider remembering a flag. Never
+  widen the advertised value back to the host-level one.
+
+Reaching the container is `internal/tunnel`, and it has two modes with a real difference a renter
+must be told about before paying: `named` (registry-provisioned Cloudflare tunnel, stable hostnames,
+**SSH and Jupyter**) and `quick` (`cloudflared tunnel --url`, no Cloudflare account at all, random
+hostname, **Jupyter only — no SSH**, because a quick tunnel carries no TCP). `nodespec.LeaseOffer.SSH`
+is what advertises which.
+
+Cloudflare credentials live **only** in the registry's environment
+(`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `LEASE_DOMAIN`). Providers
+never have a Cloudflare account; `POST /v1/nodes/:id/tunnel-token` provisions one on their behalf and
+returns a token good for running that one tunnel. A registry without those variables is still a fine
+registry — it just answers 503 there and nodes fall back to quick tunnels.
 
 ## Conventions
 
