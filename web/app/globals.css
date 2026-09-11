@@ -1,133 +1,256 @@
+/*
+ * ClearGate's website styling.
+ *
+ * Near-black ground, near-white ink, hairline rules, and one phosphor-green
+ * accent spent only where it carries meaning: a node that is live, a payment
+ * that settled, the step you are looking at. Everything else is greyscale, so
+ * the green never becomes decoration.
+ *
+ * Three typefaces, each with a job: a serif for display headings, a sans for
+ * prose, and a monospace for anything a machine produced — node ids, Hedera
+ * accounts, tinybar amounts, image tags, URLs. That last rule is the important
+ * one: this is a payments product, and the values a renter checks before
+ * spending money should look like values, not like copy.
+ *
+ * Tailwind v4 with the shadcn token layout, shared with the design system in
+ * `optimus-the-ai-platform-to-build-and-ship/`, so components port across
+ * unchanged. The palette is inverted from that source (dark ground, green
+ * accent); the type scale, spacing rhythm and hairlines are identical.
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
 :root {
-  --bg: #0e0f12;
-  --panel: #16181d;
-  --border: #262a32;
-  --text: #e6e8ec;
-  --muted: #9aa1ad;
-  --accent: #7dd3a0;
-  --warn: #e0b464;
+  /* Ground and ink. */
+  --background: #08090a;
+  --foreground: #ededec;
+  --muted: #16181a;
+  --muted-foreground: #8a8a85;
+
+  /*
+   * Raised surfaces. Optimus flips to `bg-foreground text-background` for its
+   * emphasis band; on a dark ground that reads as a flashbulb, so the same
+   * rhythm is carried by a panel one step off the background instead.
+   */
+  --panel: #101113;
+  --panel-foreground: #ededec;
+
+  --card: #0c0d0f;
+  --card-foreground: #ededec;
+  --popover: #0c0d0f;
+  --popover-foreground: #ededec;
+
+  /* Primary is the white pill. Green is never a button. */
+  --primary: #ededec;
+  --primary-foreground: #08090a;
+  --secondary: #16181a;
+  --secondary-foreground: #ededec;
+
+  /*
+   * The single accent. Live status, settled payments, the active step —
+   * things a reader acts on. Never a heading, never a background wash.
+   */
+  --accent: #00e87a;
+  --accent-foreground: #08090a;
+
+  /* Node status. Semantic, and the same three states the provider's TUI uses. */
+  --ok: #00e87a;
+  --warn: #e8b100;
+
+  --destructive: #ff5c5c;
+  --destructive-foreground: #08090a;
+
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: #00e87a;
+
+  --radius: 0.25rem;
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --font-sans: var(--font-instrument), "Instrument Sans", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+  --font-display: var(--font-instrument-serif), "Instrument Serif", Georgia, serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-panel: var(--panel);
+  --color-panel-foreground: var(--panel-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Green is the focus colour too — it is the only thing that reads as "live". */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
 }
 
-main {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 40px 20px 80px;
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .text-stroke {
+    -webkit-text-stroke: 1.5px currentColor;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .marquee {
+    animation: marquee 30s linear infinite;
+  }
+
+  .marquee-reverse {
+    animation: marquee-reverse 25s linear infinite;
+  }
+
+  @keyframes marquee {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+
+  @keyframes marquee-reverse {
+    0% {
+      transform: translateX(-50%);
+    }
+    100% {
+      transform: translateX(0);
+    }
+  }
+
+  .animate-char-in {
+    animation: char-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    opacity: 0;
+    filter: blur(40px);
+    transform: translateY(100%);
+  }
+
+  @keyframes char-in {
+    0% {
+      opacity: 0;
+      filter: blur(40px);
+      transform: translateY(100%);
+    }
+    100% {
+      opacity: 1;
+      filter: blur(0);
+      transform: translateY(0);
+    }
+  }
+
+  /* Code reveal, shared by the how-it-works and developer code panels. */
+  .code-line-reveal {
+    opacity: 0;
+    transform: translateX(-8px);
+    animation: line-reveal 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  @keyframes line-reveal {
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .code-char-reveal {
+    opacity: 0;
+    filter: blur(8px);
+    animation: char-reveal 0.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  @keyframes char-reveal {
+    to {
+      opacity: 1;
+      filter: blur(0);
+    }
+  }
+
+  .noise-overlay {
+    position: relative;
+  }
+
+  .noise-overlay::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    opacity: 0.025;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* The diagonal hatch. It marks an emphasis band and nothing else. */
+  .hatch {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 40px,
+      currentColor 40px,
+      currentColor 41px
+    );
+  }
 }
 
-a {
-  color: var(--accent);
-}
+@media (prefers-reduced-motion: reduce) {
+  .marquee,
+  .marquee-reverse,
+  .animate-char-in,
+  .code-line-reveal,
+  .code-char-reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    filter: none !important;
+    transform: none !important;
+  }
 
-h1 {
-  margin: 0 0 8px;
-  font-size: 26px;
-}
-
-h2 {
-  font-size: 18px;
-  margin: 32px 0 12px;
-}
-
-p {
-  color: var(--muted);
-  margin: 0 0 16px;
-}
-
-nav {
-  display: flex;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-}
-
-nav strong {
-  margin-right: auto;
-}
-
-code,
-pre {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 13px;
-}
-
-pre {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
-  overflow-x: auto;
-  white-space: pre;
-  color: var(--text);
-}
-
-label {
-  display: block;
-  margin-bottom: 14px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-input[type="text"] {
-  display: block;
-  width: 100%;
-  margin-top: 5px;
-  padding: 8px 10px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-family: ui-monospace, monospace;
-  font-size: 13px;
-}
-
-button {
-  padding: 8px 14px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-th,
-td {
-  text-align: left;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-th {
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.online {
-  color: var(--accent);
-}
-
-.offline {
-  color: var(--muted);
-}
-
-.paused {
-  color: var(--warn);
+  html {
+    scroll-behavior: auto;
+  }
 }
