@@ -1,0 +1,49 @@
+# sshd for a ClearGate lease container.
+#
+# There is no authorized_keys file here, and there never will be. Access is
+# granted entirely by certificate: the node's own CA signs the renter's public
+# key into a certificate carrying this lease's id as its principal, and the two
+# directives below are what make that the only way in.
+#
+#   TrustedUserCAKeys         which CA's signatures count
+#   AuthorizedPrincipalsFile  which principals that CA may vouch for here
+#
+# Because the principal is the lease id, a certificate signed by this same CA
+# for a *different* lease is refused by this container even though the signature
+# is perfectly valid. And because the certificate's validity ends when the paid
+# time does, nothing has to be actively revoked when a lease runs out.
+
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+PubkeyAuthentication yes
+TrustedUserCAKeys /etc/ssh/cleargate_ca.pub
+AuthorizedPrincipalsFile /etc/ssh/principals/%u
+
+# The one login this container offers is a certificate. Passwords are off,
+# keyboard-interactive is off, and plain public keys are off — "none" is a
+# literal filename here, not a keyword, and no such file is ever created.
+AuthorizedKeysFile none
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+UsePAM no
+
+# A renter forwards a local port to reach Jupyter from Colab, so TCP forwarding
+# has to be on. Everything else that could turn this container into a network
+# appliance stays off.
+AllowTcpForwarding yes
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+AllowAgentForwarding no
+
+PrintMotd yes
+ClientAliveInterval 60
+ClientAliveCountMax 5
+LoginGraceTime 30
+MaxAuthTries 6
+
+Subsystem sftp /usr/lib/openssh/sftp-server
