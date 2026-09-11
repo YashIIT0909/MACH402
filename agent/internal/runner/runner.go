@@ -46,6 +46,16 @@ type Runner struct {
 
 	mu   sync.RWMutex
 	jobs map[string]*Job
+
+	// leaseImageCUDA is whether the configured lease image can actually compute
+	// on a GPU. Decided once at startup and read-only afterwards.
+	leaseImageCUDA bool
+
+	// leases holds every lease this process has seen, and activeLease names the
+	// one currently holding the node's single lease slot. V1 rents to one
+	// renter at a time (implementation.md §9); both are guarded by mu.
+	leases      map[string]*Lease
+	activeLease string
 }
 
 // New builds a Runner and reports what sandbox it will actually provide.
@@ -81,6 +91,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Runner, err
 		}),
 		events: newEventBroker(),
 		jobs:   make(map[string]*Job),
+		leases: make(map[string]*Lease),
 	}
 
 	// Job state lives in memory, so nothing here survives a restart. Anything
@@ -88,6 +99,30 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Runner, err
 	// during the artifact retention window, and would otherwise sit on the
 	// provider's disk forever holding another renter's data.
 	run.sweepOrphans(ctx)
+
+	// Leases have the same problem with a sharper edge: an orphan there is a
+	// container with a live sshd that nothing is metering any more.
+	if cfg.Leases.Enabled {
+		run.sweepLeaseOrphans(ctx)
+
+		// A working card on the host does not mean a renter can use it. Say so
+		// loudly if the lease image cannot: a provider who thinks they are
+		// renting out a GPU and is selling CPU time will find out from an angry
+		// renter otherwise — the same failure the CPU-fallback warning exists
+		// to prevent.
+		run.leaseImageCUDA = run.detectLeaseImageCUDA(ctx)
+		switch {
+		case run.leaseImageCUDA:
+			log.Info("lease image is CUDA-capable", "image", cfg.Leases.Image)
+		case gpu.Available:
+			log.Warn("this node has a usable GPU but its lease image has no CUDA runtime; "+
+				"interactive leases will be sold as CPU-only until it is rebuilt",
+				"image", cfg.Leases.Image,
+				"fix", "make lease-image")
+		default:
+			log.Info("leases will be CPU-only", "image", cfg.Leases.Image)
+		}
+	}
 
 	return run, nil
 }

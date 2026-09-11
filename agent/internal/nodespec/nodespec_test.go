@@ -39,7 +39,7 @@ func marshal(t *testing.T, value any) map[string]any {
 
 func TestHeartbeatCarriesEveryFieldTheRegistryRequires(t *testing.T) {
 	beat := nodespec.Heartbeat{
-		Spec:      nodespec.Build(testConfig(), "v1.2.3", "0.0.5678", runner.GPU{Available: true, Model: "NVIDIA RTX 4090", VRAMMb: 24576}),
+		Spec:      nodespec.Build(testConfig(), "v1.2.3", "0.0.5678", runner.GPU{Available: true, Model: "NVIDIA RTX 4090", VRAMMb: 24576}, false),
 		PublicURL: "http://localhost:8402",
 		Paused:    false,
 	}
@@ -64,7 +64,7 @@ func TestCPUFallbackReportsNullGPUDetails(t *testing.T) {
 	spec := nodespec.Build(testConfig(), "v1.2.3", "", runner.GPU{
 		Available: false,
 		Reason:    "nvidia-smi unavailable",
-	})
+	}, false)
 
 	decoded := marshal(t, spec)
 	gpu, ok := decoded["gpu"].(map[string]any)
@@ -85,5 +85,45 @@ func TestCPUFallbackReportsNullGPUDetails(t *testing.T) {
 	// client SDK's check against /supported (CLAUDE.md invariant 5).
 	if _, present := decoded["fee_payer"]; present {
 		t.Error("fee_payer should be omitted when the facilitator did not confirm one")
+	}
+}
+
+// The trap this guards: a node with a working card whose lease image has no
+// CUDA runtime. The host-level gpu block says "available", because it is — but
+// a lease container on that image lists the device and fails every kernel
+// launch, so the lease offer has to say the opposite, and a renter has to be
+// able to see the difference before paying.
+func TestLeaseOfferReportsGPUSeparatelyFromTheHost(t *testing.T) {
+	cfg := testConfig()
+	cfg.Leases.Enabled = true
+
+	workingCard := runner.GPU{Available: true, Model: "NVIDIA RTX 3050", VRAMMb: 4096}
+
+	cudaLess := marshal(t, nodespec.Build(cfg, "v1", "", workingCard, false))
+	hostGPU, _ := cudaLess["gpu"].(map[string]any)
+	leases, ok := cudaLess["leases"].(map[string]any)
+	if !ok {
+		t.Fatalf("leases missing from the spec: %v", cudaLess["leases"])
+	}
+	if hostGPU["available"] != true {
+		t.Errorf("the host really does have a card; gpu.available should stay true")
+	}
+	if leases["gpu"] != false {
+		t.Errorf("leases.gpu = %v, want false — the image cannot compute on the card", leases["gpu"])
+	}
+
+	capable := marshal(t, nodespec.Build(cfg, "v1", "", workingCard, true))
+	capableLeases, _ := capable["leases"].(map[string]any)
+	if capableLeases["gpu"] != true {
+		t.Errorf("leases.gpu = %v, want true", capableLeases["gpu"])
+	}
+}
+
+// A node that never opted into leasing announces no lease block at all, so a
+// client written before leases existed sees exactly the shape it expects.
+func TestSpecOmitsLeasesWhenTheNodeDidNotOptIn(t *testing.T) {
+	decoded := marshal(t, nodespec.Build(testConfig(), "v1", "", runner.GPU{}, false))
+	if _, present := decoded["leases"]; present {
+		t.Errorf("leases should be absent on a node that does not sell them, got %v", decoded["leases"])
 	}
 }

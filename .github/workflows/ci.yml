@@ -29,6 +29,10 @@ jobs:
       # covers the sandbox on runners that have one and stays green where not.
       - name: test
         run: cd agent && go test ./...
+      # Its own module, so the step above does not reach it — and it is the one
+      # thing standing between a renter's shell and the open internet.
+      - name: egress proxy
+        run: cd agent/lease-image/egress && go vet ./... && go test ./...
 
   typescript:
     name: client and smoke (ts)

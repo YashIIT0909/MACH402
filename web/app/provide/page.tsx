@@ -17,8 +17,8 @@ const requirements = [
   },
   {
     number: "02",
-    title: "Go 1.25 to build the binary",
-    body: "The node ships as one static binary with no Hedera SDK linked, because the merchant side of x402 needs only JSON and HTTP calls to a facilitator.",
+    title: "Go 1.25 and git to build the binary",
+    body: "The node ships as one static binary with no Hedera SDK linked, because the merchant side of x402 needs only JSON and HTTP calls to a facilitator. The installer clones the repo itself if you have no checkout.",
   },
   {
     number: "03",
@@ -45,14 +45,59 @@ export default function ProvidePage() {
           </>
         }
       >
-        Fill this in and run the command it produces on the machine with the card. It builds the
-        node daemon, checks Docker and the GPU, and starts announcing itself. Renters then pay your
-        node directly.
+        Fill this in and run the command it produces on the machine with the card — nothing to
+        clone first, it fetches what it needs. It builds the node daemon, checks Docker and the
+        GPU, starts announcing itself, then drops you into a live dashboard. Renters pay your node
+        directly.
       </PageHero>
 
       <section className="py-16 lg:py-24">
         <div className={CONTAINER}>
           <InstallCommand registryUrl={REGISTRY_URL} />
+        </div>
+      </section>
+
+      <section className="border-t border-foreground/10 py-16 lg:py-24">
+        <div className={CONTAINER}>
+          <Eyebrow className="mb-6">Two products</Eyebrow>
+          <h2 className="mb-12 font-display text-4xl tracking-tight lg:text-5xl">
+            Two ways to sell,
+            <br />
+            <span className="text-muted-foreground">and they are different asks.</span>
+          </h2>
+
+          <div className="grid gap-px bg-foreground/10 md:grid-cols-2">
+            <div className="bg-background p-8 lg:p-10">
+              <span className="mb-4 block font-mono text-xs tracking-widest text-muted-foreground uppercase">
+                Batch jobs · on by default
+              </span>
+              <p className="text-muted-foreground">
+                A renter sends a script, it runs in a container with no network at all, and they
+                get the output back. Nothing of yours is reachable and nothing they send can phone
+                home.
+              </p>
+            </div>
+
+            <div className="bg-background p-8 lg:p-10">
+              <span className="mb-4 block font-mono text-xs tracking-widest text-accent uppercase">
+                Interactive leases · opt in
+              </span>
+              <p className="mb-4 text-muted-foreground">
+                This inverts it. Nothing is uploaded — a renter&apos;s code and data stay on their
+                own machine — and instead they get a shell and a Jupyter server in a container on
+                yours, for the minutes they paid for. That is a bigger thing to agree to, so it is
+                its own checkbox and its own price, never something that arrives with the GPU box.
+              </p>
+              <p className="text-muted-foreground">
+                What a lease does not expose: your filesystem, your other containers, your Docker
+                socket, or your network. The container gets a throwaway workspace wiped when the
+                lease ends, and its only route off your machine is a proxy that allows package and
+                model registries and denies everything else. Nobody gets in without a certificate
+                your machine signed, and those expire when the paid time does — the signing key
+                never leaves your box, the same way no Hedera key of yours ever does.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 

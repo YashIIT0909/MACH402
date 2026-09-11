@@ -21,6 +21,14 @@ const (
 	EventJobStarted  EventKind = "job_started"
 	EventJobFinished EventKind = "job_finished"
 	EventJobReaped   EventKind = "job_reaped"
+
+	// Lease events. A provider watching the dashboard should be able to see
+	// exactly when a stranger's shell opened on their machine and when it went
+	// away again, so every transition is reported.
+	EventLeaseStarted  EventKind = "lease_started"
+	EventLeaseExtended EventKind = "lease_extended"
+	EventLeasePaused   EventKind = "lease_paused"
+	EventLeaseEnded    EventKind = "lease_ended"
 )
 
 // Event is one line for the provider's dashboard.
@@ -32,6 +40,7 @@ type Event struct {
 	At          time.Time
 	Kind        EventKind
 	JobID       string
+	LeaseID     string
 	Status      Status
 	Detail      string
 	Payer       string

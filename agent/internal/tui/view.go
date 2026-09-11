@@ -222,6 +222,20 @@ func renderEvent(event runner.Event) string {
 			statusStyle(event.Status).Render(string(event.Status)), short(event.JobID), event.Detail)
 	case runner.EventJobReaped:
 		return fmt.Sprintf("%s %s %s", stamp, styleDim.Render("reaped"), short(event.JobID))
+	// A provider should be able to watch a stranger's shell open on their
+	// machine and close again, in the same feed as the money.
+	case runner.EventLeaseStarted:
+		return fmt.Sprintf("%s %s %s  %s", stamp,
+			styleRunning.Render("lease open"), short(event.LeaseID), event.Detail)
+	case runner.EventLeaseExtended:
+		return fmt.Sprintf("%s %s %s  %s", stamp,
+			styleGood.Render("lease extended"), short(event.LeaseID), event.Detail)
+	case runner.EventLeasePaused:
+		return fmt.Sprintf("%s %s %s  %s", stamp,
+			styleWarn.Render("lease frozen"), short(event.LeaseID), event.Detail)
+	case runner.EventLeaseEnded:
+		return fmt.Sprintf("%s %s %s  %s", stamp,
+			styleDim.Render("lease ended"), short(event.LeaseID), event.Detail)
 	default:
 		return fmt.Sprintf("%s %s %s", stamp, event.Kind, event.Detail)
 	}

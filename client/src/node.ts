@@ -4,7 +4,15 @@
  * Only `createJob` costs money; everything else is either free (specs) or
  * authorized by the job token minted at payment.
  */
-import type { JobSpec, JobState, NodeSpec, SettleResponse } from "@cleargate/types";
+import type {
+  JobSpec,
+  JobState,
+  LeaseCreated,
+  LeaseSpec,
+  LeaseState,
+  NodeSpec,
+  SettleResponse,
+} from "@cleargate/types";
 import { payFor, type Payer } from "./pay.js";
 
 export type JobHandle = {
@@ -41,6 +49,68 @@ export class NodeClient {
       body: JSON.stringify(spec),
     });
     return { job: (await response.json()) as JobHandle, settlement };
+  }
+
+  /**
+   * x402-gated: buys the first slice of an interactive lease.
+   *
+   * The node only settles once the container is up *and* proven reachable, so a
+   * failure here means nothing was charged.
+   */
+  async createLease(
+    payer: Payer,
+    spec: LeaseSpec,
+  ): Promise<{ lease: LeaseCreated; settlement: SettleResponse }> {
+    const { response, settlement } = await payFor(payer, `${this.baseUrl}/v1/leases`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec),
+    });
+    return { lease: (await response.json()) as LeaseCreated, settlement };
+  }
+
+  /**
+   * x402-gated: buys another slice on a live lease.
+   *
+   * The node re-signs a fresh certificate with the later expiry rather than
+   * extending the old one, so what comes back has to replace what the renter
+   * currently holds.
+   */
+  async extendLease(
+    payer: Payer,
+    leaseId: string,
+    token: string,
+    spec: LeaseSpec,
+  ): Promise<{ lease: LeaseCreated; settlement: SettleResponse }> {
+    const { response, settlement } = await payFor(
+      payer,
+      `${this.baseUrl}/v1/leases/${leaseId}/extend`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(spec),
+      },
+    );
+    return { lease: (await response.json()) as LeaseCreated, settlement };
+  }
+
+  /** Free: what the auto-extend loop polls to decide whether to buy more time. */
+  async leaseState(leaseId: string, token: string): Promise<LeaseState> {
+    return (await this.authorized(`/v1/leases/${leaseId}`, token).then((r) =>
+      r.json(),
+    )) as LeaseState;
+  }
+
+  /** Free: ends the lease and stops the meter. Time already bought is not refunded. */
+  async stopLease(leaseId: string, token: string): Promise<LeaseState> {
+    const response = await fetch(`${this.baseUrl}/v1/leases/${leaseId}/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(`stopping the lease failed: ${response.status} ${response.statusText}`);
+    }
+    return (await response.json()) as LeaseState;
   }
 
   async state(jobId: string, token: string): Promise<JobState> {

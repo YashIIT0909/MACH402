@@ -148,7 +148,11 @@ function NodeTable({ nodes }: { nodes: NodeListing[] }) {
               </td>
               <td className="py-5 pr-5 align-top">
                 <span className="font-mono whitespace-nowrap">{hbar(node.price_tinybars)} HBAR</span>
-                <Sub mono>{node.price_tinybars} tinybars</Sub>
+                <Sub mono>{node.price_tinybars} tinybars · per job</Sub>
+                {/* Two products on one node. A node that never opted into
+                    leasing announces no lease block at all, so this cell reads
+                    exactly as it did before leasing existed. */}
+                <Lease node={node} />
               </td>
               <td className="py-5 pr-5 align-top">
                 <span className="whitespace-nowrap">
@@ -181,6 +185,7 @@ function NodeCard({ node }: { node: NodeListing }) {
       <div className="mb-5 border-b border-foreground/10 pb-5">
         <div className="font-display text-3xl">{hbar(node.price_tinybars)} HBAR</div>
         <Sub mono>{node.price_tinybars} tinybars per job</Sub>
+        <Lease node={node} />
       </div>
 
       <dl className="space-y-3">
@@ -214,6 +219,32 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       </dt>
       <dd className="min-w-0 text-right">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * The metered half of what a node sells, when it sells it.
+ *
+ * Rendered as a second line under the flat job price rather than its own
+ * column: most nodes offer only jobs, and a column that is empty on most rows
+ * costs every reader width to tell a minority of them something.
+ */
+function Lease({ node }: { node: NodeListing }) {
+  if (node.leases === undefined) return null;
+
+  const offer = node.leases;
+  const reach = offer.ssh && offer.jupyter ? "ssh + jupyter" : offer.ssh ? "ssh" : "jupyter only";
+
+  return (
+    <span className="mt-3 block border-t border-foreground/10 pt-3">
+      <span className="font-mono whitespace-nowrap text-accent">
+        {hbar(offer.price_tinybars_per_minute)} HBAR
+      </span>
+      <Sub mono>
+        per minute · {reach}
+        {offer.gpu ? "" : " · cpu only"}
+      </Sub>
+    </span>
   );
 }
 
