@@ -67,53 +67,14 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, present, err := x402.DecodePaymentHeader(r)
-	if err != nil {
-		s.respondWithChallenge(w, r, "malformed payment header: "+err.Error())
+	payload, requirements, ok := s.collectPayment(w, r, s.cfg.PriceTinybars, s.jobDescription())
+	if !ok {
 		return
 	}
-	if !present {
-		s.emit(runner.Event{Kind: runner.EventChallenged, Detail: r.URL.Path})
-		s.respondWithChallenge(w, r, "Payment required")
-		return
-	}
-
-	// Verify against our own requirements, not the client's copy of them: the
-	// payload's `accepted` block is attacker-controlled.
-	requirements, err := s.requirements(r)
-	if err != nil {
-		s.log.Error("cannot build payment requirements", "error", err)
-		writeError(w, http.StatusServiceUnavailable, "facilitator unreachable; try again shortly")
-		return
-	}
-
-	verifyCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	verification, err := s.fac.Verify(verifyCtx, x402.VerifyRequest{
-		X402Version:         x402.Version,
-		PaymentPayload:      *payload,
-		PaymentRequirements: *requirements,
-	})
-	if err != nil {
-		s.log.Error("verify failed", "error", err)
-		s.respondWithChallenge(w, r, "payment verification failed: "+err.Error())
-		return
-	}
-	if !verification.IsValid {
-		reason := verification.InvalidReason
-		if verification.InvalidMessage != "" {
-			reason += ": " + verification.InvalidMessage
-		}
-		s.emit(runner.Event{Kind: runner.EventRejected, Detail: reason, Payer: verification.Payer})
-		s.respondWithChallenge(w, r, "payment invalid: "+reason)
-		return
-	}
-	s.emit(runner.Event{Kind: runner.EventVerified, Payer: verification.Payer})
 
 	// Verified. Start the work, then settle — in that order, and quickly.
 	jobID := newJobID()
-	token := newJobToken()
+	token := newAccessToken()
 
 	job, err := s.runner.Start(r.Context(), jobID, token, spec)
 	if err != nil {
@@ -138,7 +99,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			Kind: runner.EventSettleFailed, JobID: jobID, Detail: reasonOf(settlement),
 		})
 		s.abandonUnpaidJob(settleCtx, job, jobID, settlement, err)
-		s.respondWithChallenge(w, r, settlementFailureMessage(settlement, err))
+		s.respondWithChallengeFor(w, r, settlementFailureMessage(settlement, err),
+			s.cfg.PriceTinybars, s.jobDescription())
 		return
 	}
 
@@ -228,9 +190,77 @@ func settlementFailureMessage(settlement *x402.SettleResponse, err error) string
 	return "settlement failed"
 }
 
+// collectPayment runs the 402-challenge-then-verify half of every paid endpoint.
+//
+// It is shared by jobs and leases so there is exactly one implementation of the
+// order that matters: challenge if unpaid, verify against *our* requirements
+// rather than the client's copy of them, and never let an unverified payload
+// reach the code that starts work.
+//
+// amount and description differ per endpoint — a job is a flat fee, a lease is
+// priced by the minutes being bought — and everything else about the challenge
+// comes from the node's own configuration.
+//
+// It returns ok=false having already written a response.
+func (s *Server) collectPayment(
+	w http.ResponseWriter,
+	r *http.Request,
+	amount, description string,
+) (*x402.PaymentPayload, *x402.PaymentRequirements, bool) {
+	payload, present, err := x402.DecodePaymentHeader(r)
+	if err != nil {
+		s.respondWithChallengeFor(w, r, "malformed payment header: "+err.Error(), amount, description)
+		return nil, nil, false
+	}
+	if !present {
+		s.emit(runner.Event{Kind: runner.EventChallenged, Detail: r.URL.Path})
+		s.respondWithChallengeFor(w, r, "Payment required", amount, description)
+		return nil, nil, false
+	}
+
+	// The payload's `accepted` block is attacker-controlled, so the requirements
+	// verified against are rebuilt here from this node's own configuration.
+	requirements, err := s.requirements(r, amount, description)
+	if err != nil {
+		s.log.Error("cannot build payment requirements", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "facilitator unreachable; try again shortly")
+		return nil, nil, false
+	}
+
+	verifyCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	verification, err := s.fac.Verify(verifyCtx, x402.VerifyRequest{
+		X402Version:         x402.Version,
+		PaymentPayload:      *payload,
+		PaymentRequirements: *requirements,
+	})
+	if err != nil {
+		s.log.Error("verify failed", "error", err)
+		s.respondWithChallengeFor(w, r, "payment verification failed: "+err.Error(), amount, description)
+		return nil, nil, false
+	}
+	if !verification.IsValid {
+		reason := verification.InvalidReason
+		if verification.InvalidMessage != "" {
+			reason += ": " + verification.InvalidMessage
+		}
+		s.emit(runner.Event{Kind: runner.EventRejected, Detail: reason, Payer: verification.Payer})
+		s.respondWithChallengeFor(w, r, "payment invalid: "+reason, amount, description)
+		return nil, nil, false
+	}
+
+	s.emit(runner.Event{Kind: runner.EventVerified, Payer: verification.Payer})
+	return payload, requirements, true
+}
+
+func (s *Server) jobDescription() string {
+	return "One GPU job on ClearGate node " + s.cfg.NodeID
+}
+
 // requirements builds this node's payment requirements for the current request.
-func (s *Server) requirements(r *http.Request) (*x402.PaymentRequirements, error) {
-	challenge, err := s.buildChallenge(r, "")
+func (s *Server) requirements(r *http.Request, amount, description string) (*x402.PaymentRequirements, error) {
+	challenge, err := s.buildChallenge(r, "", amount, description)
 	if err != nil {
 		return nil, err
 	}
@@ -240,17 +270,17 @@ func (s *Server) requirements(r *http.Request) (*x402.PaymentRequirements, error
 	return &challenge.Accepts[0], nil
 }
 
-func (s *Server) buildChallenge(r *http.Request, reason string) (*x402.PaymentRequired, error) {
+func (s *Server) buildChallenge(r *http.Request, reason, amount, description string) (*x402.PaymentRequired, error) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	return x402.BuildChallenge(ctx, s.fac, x402.ChallengeConfig{
 		PayTo:             s.cfg.PayTo,
-		Amount:            s.cfg.PriceTinybars,
+		Amount:            amount,
 		Asset:             s.cfg.Asset,
 		Network:           s.cfg.Network,
 		MaxTimeoutSeconds: s.cfg.MaxTimeoutSeconds,
-		Description:       "One GPU job on ClearGate node " + s.cfg.NodeID,
+		Description:       description,
 		ServiceName:       "ClearGate",
 		MimeType:          "application/json",
 	}, s.resourceURL(r), reason)
@@ -273,8 +303,8 @@ func (s *Server) resourceURL(r *http.Request) string {
 	return fmt.Sprintf("%s://%s%s", scheme, r.Host, r.URL.Path)
 }
 
-func (s *Server) respondWithChallenge(w http.ResponseWriter, r *http.Request, reason string) {
-	challenge, err := s.buildChallenge(r, reason)
+func (s *Server) respondWithChallengeFor(w http.ResponseWriter, r *http.Request, reason, amount, description string) {
+	challenge, err := s.buildChallenge(r, reason, amount, description)
 	if err != nil {
 		s.log.Error("cannot build challenge", "error", err)
 		writeError(w, http.StatusServiceUnavailable, "facilitator unreachable; try again shortly")

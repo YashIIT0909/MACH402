@@ -186,6 +186,24 @@ func (d *Docker) HasImage(ctx context.Context, image string) bool {
 	return true
 }
 
+// ImageEnv returns the environment baked into an image's config.
+//
+// Used to tell a CUDA-capable lease image from a plain one without starting a
+// container: the NVIDIA container images declare NVIDIA_DRIVER_CAPABILITIES and
+// CUDA_VERSION here, and a base with neither cannot compute on a GPU no matter
+// how many devices are passed into it.
+func (d *Docker) ImageEnv(ctx context.Context, image string) ([]string, error) {
+	var out struct {
+		Config struct {
+			Env []string `json:"Env"`
+		} `json:"Config"`
+	}
+	if err := d.doJSON(ctx, http.MethodGet, "/images/"+url.PathEscape(image)+"/json", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Config.Env, nil
+}
+
 // DeviceRequest asks for GPU passthrough. Only ever populated when the nvidia
 // runtime is actually installed.
 type DeviceRequest struct {
@@ -205,17 +223,21 @@ type Mount struct {
 // no network, capped memory and CPU, capped process count, and a read-only
 // root filesystem with exactly one writable mount (CLAUDE.md invariant 6).
 type HostConfig struct {
-	NetworkMode    string            `json:"NetworkMode"`
-	Memory         int64             `json:"Memory"`
-	NanoCPUs       int64             `json:"NanoCpus"`
-	PidsLimit      int64             `json:"PidsLimit"`
-	ReadonlyRootfs bool              `json:"ReadonlyRootfs"`
-	Mounts         []Mount           `json:"Mounts"`
-	DeviceRequests []DeviceRequest   `json:"DeviceRequests,omitempty"`
-	AutoRemove     bool              `json:"AutoRemove"`
-	CapDrop        []string          `json:"CapDrop"`
-	SecurityOpt    []string          `json:"SecurityOpt"`
-	Tmpfs          map[string]string `json:"Tmpfs,omitempty"`
+	NetworkMode    string          `json:"NetworkMode"`
+	Memory         int64           `json:"Memory"`
+	NanoCPUs       int64           `json:"NanoCpus"`
+	PidsLimit      int64           `json:"PidsLimit"`
+	ReadonlyRootfs bool            `json:"ReadonlyRootfs"`
+	Mounts         []Mount         `json:"Mounts"`
+	DeviceRequests []DeviceRequest `json:"DeviceRequests,omitempty"`
+	AutoRemove     bool            `json:"AutoRemove"`
+	CapDrop        []string        `json:"CapDrop"`
+	// CapAdd is empty for jobs and stays as close to empty as it can for
+	// leases: sshd needs a handful of capabilities to drop privileges into the
+	// renter's account, and nothing beyond those is ever granted.
+	CapAdd      []string          `json:"CapAdd,omitempty"`
+	SecurityOpt []string          `json:"SecurityOpt"`
+	Tmpfs       map[string]string `json:"Tmpfs,omitempty"`
 }
 
 // CreateContainerRequest is the body of POST /containers/create.
@@ -226,6 +248,21 @@ type CreateContainerRequest struct {
 	WorkingDir string            `json:"WorkingDir,omitempty"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 	HostConfig HostConfig        `json:"HostConfig"`
+	// NetworkingConfig attaches the container to a user-defined network at
+	// creation time. Attaching afterwards would leave a window in which the
+	// container is on the default bridge with unrestricted egress.
+	NetworkingConfig *NetworkingConfig `json:"NetworkingConfig,omitempty"`
+}
+
+// NetworkingConfig names the networks a container joins at creation.
+type NetworkingConfig struct {
+	EndpointsConfig map[string]EndpointConfig `json:"EndpointsConfig"`
+}
+
+// EndpointConfig is one network attachment. Aliases are the names other
+// containers on the same network can resolve it by.
+type EndpointConfig struct {
+	Aliases []string `json:"Aliases,omitempty"`
 }
 
 type createContainerResponse struct {
@@ -278,6 +315,93 @@ func (d *Docker) WaitContainer(ctx context.Context, id string) (int, error) {
 		return out.StatusCode, fmt.Errorf("container wait: %s", out.Error.Message)
 	}
 	return out.StatusCode, nil
+}
+
+// PauseContainer freezes every process in a container through the cgroup
+// freezer. Used when a lease's paid time lapses: the renter's work is still
+// there, using memory but no CPU, until they either extend or the grace period
+// runs out. Killing on the first missed payment would throw away work someone
+// was in the middle of.
+func (d *Docker) PauseContainer(ctx context.Context, id string) error {
+	return d.doJSON(ctx, http.MethodPost, "/containers/"+id+"/pause", nil, nil, nil)
+}
+
+// UnpauseContainer thaws a frozen container after a lease is extended.
+func (d *Docker) UnpauseContainer(ctx context.Context, id string) error {
+	return d.doJSON(ctx, http.MethodPost, "/containers/"+id+"/unpause", nil, nil, nil)
+}
+
+// ContainerIP returns the container's address on a named network.
+//
+// The tunnel dials this directly rather than a published host port. A lease
+// container lives on an internal network with no route off the box, and the
+// host can still reach it because traffic from the host to its own bridge is
+// delivered locally rather than forwarded — which is exactly the traffic the
+// internal flag blocks.
+func (d *Docker) ContainerIP(ctx context.Context, id, network string) (string, error) {
+	var out struct {
+		NetworkSettings struct {
+			Networks map[string]struct {
+				IPAddress string `json:"IPAddress"`
+			} `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if err := d.doJSON(ctx, http.MethodGet, "/containers/"+id+"/json", nil, nil, &out); err != nil {
+		return "", err
+	}
+	endpoint, ok := out.NetworkSettings.Networks[network]
+	if !ok || endpoint.IPAddress == "" {
+		return "", fmt.Errorf("container has no address on network %s", network)
+	}
+	return endpoint.IPAddress, nil
+}
+
+// CreateNetwork creates a user-defined bridge network.
+//
+// internal is the containment primitive leases are built on: an internal
+// network has no route to anything outside itself, so a container on it reaches
+// the internet only through something dual-homed that we control.
+func (d *Docker) CreateNetwork(ctx context.Context, name string, internal bool, labels map[string]string) error {
+	body := map[string]any{
+		"Name":     name,
+		"Driver":   "bridge",
+		"Internal": internal,
+		"Labels":   labels,
+	}
+	return d.doJSON(ctx, http.MethodPost, "/networks/create", nil, body, nil)
+}
+
+// ConnectNetwork attaches an existing container to another network. Used to
+// give the egress proxy a second leg on the default bridge, so it — and only it
+// — can reach the outside world.
+func (d *Docker) ConnectNetwork(ctx context.Context, network, containerID string, aliases []string) error {
+	body := map[string]any{
+		"Container":      containerID,
+		"EndpointConfig": EndpointConfig{Aliases: aliases},
+	}
+	return d.doJSON(ctx, http.MethodPost, "/networks/"+url.PathEscape(network)+"/connect", nil, body, nil)
+}
+
+// RemoveNetwork deletes a network. Every container on it must be gone first.
+func (d *Docker) RemoveNetwork(ctx context.Context, name string) error {
+	return d.doJSON(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil, nil, nil)
+}
+
+// ListNetworksByLabel returns every network carrying a label, for the orphan
+// sweep at startup.
+func (d *Docker) ListNetworksByLabel(ctx context.Context, label string) ([]string, error) {
+	query := url.Values{"filters": {fmt.Sprintf(`{"label":[%q]}`, label)}}
+	var out []struct {
+		Name string `json:"Name"`
+	}
+	if err := d.doJSON(ctx, http.MethodGet, "/networks", query, nil, &out); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(out))
+	for _, network := range out {
+		names = append(names, network.Name)
+	}
+	return names, nil
 }
 
 // CreateVolume creates a named volume for a job's output directory.

@@ -19,6 +19,8 @@ import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
+	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
 	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
 )
 
@@ -31,6 +33,12 @@ type Server struct {
 	receipts *receipts.Log
 	log      *slog.Logger
 	version  string
+
+	// ca and tunnel are nil unless this node opted into leasing. Both are
+	// required for a lease to be sellable: the CA is what authorizes a renter's
+	// SSH session, and the tunnel is what lets them reach it through NAT.
+	ca     *sshca.CA
+	tunnel *tunnel.Manager
 
 	// paused stops the node selling new jobs without stopping the ones already
 	// running. The provider's dashboard toggles it; a renter sees a 503 with a
@@ -48,6 +56,27 @@ func New(cfg config.Config, run *runner.Runner, fac *x402.Facilitator, log *slog
 		log:      log,
 		version:  version,
 	}
+}
+
+// EnableLeases attaches the two things a lease needs that a job does not: the
+// node's SSH certificate authority, and the tunnel that carries a renter's
+// connection in through NAT.
+//
+// It is a separate call rather than a New parameter because leasing is opt-in
+// per provider, and a node that never opted in must behave exactly as it did
+// before leases existed — including answering 404 on the /v1/leases routes.
+func (s *Server) EnableLeases(ca *sshca.CA, tunnels *tunnel.Manager) {
+	s.ca = ca
+	s.tunnel = tunnels
+}
+
+// ReapLeases runs the background loop that freezes and then reclaims leases
+// whose paid time has run out. It returns when ctx is cancelled.
+func (s *Server) ReapLeases(ctx context.Context) {
+	if s.ca == nil || s.tunnel == nil {
+		return
+	}
+	s.reapLeases(ctx)
 }
 
 // emit publishes an event for the provider's dashboard. Events are a display
@@ -75,12 +104,20 @@ func (s *Server) Handler() http.Handler {
 
 	// x402-gated
 	mux.HandleFunc("POST /v1/jobs", s.handleCreateJob)
+	mux.HandleFunc("POST /v1/leases", s.handleCreateLease)
+	mux.HandleFunc("POST /v1/leases/{id}/extend", s.handleExtendLease)
 
 	// job-token-gated
 	mux.HandleFunc("GET /v1/jobs/{id}", s.handleJobState)
 	mux.HandleFunc("GET /v1/jobs/{id}/logs", s.handleJobLogs)
 	mux.HandleFunc("GET /v1/jobs/{id}/artifact", s.handleJobArtifact)
 	mux.HandleFunc("POST /v1/jobs/{id}/stop", s.handleJobStop)
+
+	// lease-token-gated. Reading and stopping a lease are both free: charging
+	// for the poll that decides whether to buy another slice would be absurd,
+	// and charging to stop would punish a renter for releasing the machine.
+	mux.HandleFunc("GET /v1/leases/{id}", s.handleLeaseState)
+	mux.HandleFunc("POST /v1/leases/{id}/stop", s.handleLeaseStop)
 
 	return s.withLogging(mux)
 }
@@ -139,7 +176,7 @@ func (s *Server) Spec(ctx context.Context) nodespec.Spec {
 			feePayer = advertised
 		}
 	}
-	return nodespec.Build(s.cfg, s.version, feePayer, s.runner.GPU())
+	return nodespec.Build(s.cfg, s.version, feePayer, s.runner.GPU(), s.runner.LeaseGPU())
 }
 
 // Heartbeat is what this node tells the registry about itself. The registry is
@@ -160,9 +197,21 @@ func newJobID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// newJobToken mints the bearer token that authorizes reading one job's logs and
-// artifact. 32 bytes of randomness, issued only after payment settles.
-func newJobToken() string {
+// newLeaseID returns a short, unguessable lease identifier.
+//
+// It doubles as the SSH certificate principal, so it has to be unguessable for
+// the same reason the job token does: it is part of what scopes a renter's
+// access to their own session.
+func newLeaseID() string {
+	var raw [8]byte
+	_, _ = rand.Read(raw[:])
+	return "lease" + hex.EncodeToString(raw[:])
+}
+
+// newAccessToken mints the bearer token that scopes a renter to their own
+// purchase: one job's logs and artifact, or one lease's state and stop button.
+// 32 bytes of randomness, issued only once the work exists.
+func newAccessToken() string {
 	var raw [32]byte
 	_, _ = rand.Read(raw[:])
 	return hex.EncodeToString(raw[:])
