@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type * as THREE_NS from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
+import { createPixelLens, type PixelLens } from "./pixel-lens";
+
 /**
  * The RTX 3080 that sits in the hero.
  *
@@ -28,12 +30,21 @@ const MAX_PITCH = 0.14;
 /** Fraction of the remaining distance covered per frame at 60fps. */
 const DAMPING = 0.045;
 
-const PARTICLE_COUNT = 650;
+const PARTICLE_COUNT = 380;
 /**
  * Camera pull-back beyond a perfect fit. Above 1 the card sits inside the
  * frame with air around it; at 1 it touches the edges exactly.
  */
 const FILL = 1.69;
+/**
+ * Fan speed at full scroll, as a multiple of the baked clip's own rate. The
+ * clip is already the 1500rpm one, so this only needs to take the edge off.
+ */
+const MAX_FAN_RATE = 1.35;
+/** Seconds for a scroll burst to fade once the page stops moving. */
+const IMPULSE_FADE = 0.35;
+/** Seconds for the fans to reach whatever the scroll is currently asking for. */
+const SPIN_CHASE = 0.12;
 /** Phosphor green, matching --accent. */
 const ACCENT = 0x00e87a;
 
@@ -132,6 +143,17 @@ export function GpuModel({
         renderer.domElement.remove();
       });
       if (abandon()) return;
+
+      /*
+       * The patch of pixelation under the cursor. Off entirely under reduced
+       * motion, where a dissolving image is the kind of thing being asked about.
+       */
+      let lens: PixelLens | null = null;
+      if (!still) {
+        const initial = size();
+        lens = createPixelLens(THREE, renderer, initial.width, initial.height);
+        undo.push(() => lens?.dispose());
+      }
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(32, size().width / size().height, 0.01, 100);
@@ -350,12 +372,12 @@ export function GpuModel({
 
       const particleMaterial = new THREE.PointsMaterial({
         color: ACCENT,
-        size: 0.0075,
+        size: 0.0055,
         sizeAttenuation: true,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
-        opacity: 0.8,
+        opacity: 0.34,
       });
 
       // Per-particle fade, which PointsMaterial has no uniform for.
@@ -383,12 +405,12 @@ export function GpuModel({
       if (gltf.animations.length > 0) {
         mixer = new THREE.AnimationMixer(model);
         const clip =
+          gltf.animations.find((a) => a.name.includes("1500")) ??
           gltf.animations.find((a) => a.name.includes("1200")) ??
-          gltf.animations.find((a) => a.name.includes("600")) ??
           gltf.animations[0];
         fanAction = mixer.clipAction(clip);
         fanAction.play();
-        // Held at a standstill until the hero is seen; `spin` eases this to 1.
+        // Still until something scrolls. `fanSpin` below drives this.
         fanAction.timeScale = 0;
       }
 
@@ -397,29 +419,73 @@ export function GpuModel({
       const currentRotation = { x: 0, y: 0 };
 
       const onPointerMove = (event: PointerEvent) => {
-        // Measured against the viewport, not the canvas: the card should track
-        // the cursor anywhere in the hero, not only when it is over the model.
+        // Rotation is measured against the viewport, not the canvas: the card
+        // should track the cursor anywhere in the hero, not only over itself.
         const nx = (event.clientX / window.innerWidth) * 2 - 1;
         const ny = (event.clientY / window.innerHeight) * 2 - 1;
         targetRotation.y = nx * MAX_YAW;
         targetRotation.x = ny * MAX_PITCH;
+
+        // The patch, though, is placed in the frame's own coordinates — and
+        // WebGL's v axis runs the other way to the page's.
+        if (lens) {
+          const box = host.getBoundingClientRect();
+          lens.setPointer(
+            (event.clientX - box.left) / box.width,
+            1 - (event.clientY - box.top) / box.height,
+          );
+        }
       };
+
+      const onPointerLeave = () => lens?.clearPointer();
 
       if (!still) {
         window.addEventListener("pointermove", onPointerMove, { passive: true });
-        undo.push(() => window.removeEventListener("pointermove", onPointerMove));
+        document.addEventListener("pointerleave", onPointerLeave);
+        undo.push(() => {
+          window.removeEventListener("pointermove", onPointerMove);
+          document.removeEventListener("pointerleave", onPointerLeave);
+        });
       }
+
+      // ---- scroll speed --------------------------------------------------
+      /*
+       * The fans answer to the scroll wheel: still when the page is still,
+       * faster the harder it is scrolled. Velocity is sampled here and decays
+       * in the draw loop, so letting go coasts the fans down rather than
+       * cutting them dead.
+       */
+      let scrollImpulse = 0;
+      let fanSpin = 0;
+      let lastScrollY = window.scrollY;
+      let lastScrollAt = performance.now();
+
+      const onScroll = () => {
+        const now = performance.now();
+        const elapsed = Math.max(now - lastScrollAt, 1);
+        const travelled = Math.abs(window.scrollY - lastScrollY);
+        lastScrollY = window.scrollY;
+        lastScrollAt = now;
+        /*
+         * Speed, not distance: pixels per millisecond, so the fans answer to
+         * how hard the page is being thrown rather than how far it went. ~2.5
+         * px/ms is a hard flick and pins them; a gentle drag sits near a fifth.
+         * Taking the larger keeps a fast flick from being erased by the slow
+         * tail of the same gesture arriving in the same frame.
+         */
+        scrollImpulse = Math.max(scrollImpulse, Math.min(travelled / elapsed / 2.5, 1));
+      };
+
+      window.addEventListener("scroll", onScroll, { passive: true });
+      undo.push(() => window.removeEventListener("scroll", onScroll));
 
       // ---- visibility ----------------------------------------------------
       // No point burning frames on a hero that has scrolled away.
       let visible = true;
-      let spin = 0;
-      let seen = false;
 
       const observer = new IntersectionObserver(
         ([entry]) => {
           visible = entry.isIntersecting;
-          if (entry.isIntersecting) seen = true;
         },
         { threshold: 0.05 },
       );
@@ -432,6 +498,7 @@ export function GpuModel({
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
         fit();
+        lens?.resize(width, height);
       };
       const resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
@@ -469,11 +536,21 @@ export function GpuModel({
         pivot.rotation.y = currentRotation.y - p * 0.45;
         camera.position.z = baseZ;
         renderer.toneMappingExposure = 0.68 - 0.34 * p;
-        particleMaterial.opacity = 0.8 * (1 - 0.6 * p);
+        particleMaterial.opacity = 0.34 * (1 - 0.6 * p);
 
-        // One-shot spin-up on first sight, then hold.
-        if (seen && spin < 1) spin = Math.min(1, spin + delta / 2.2);
-        if (fanAction) fanAction.timeScale = spin;
+        /*
+         * Scroll drives the fans. The impulse decays fast so they wind down
+         * the moment scrolling stops, and the spin itself is eased toward it
+         * so neither starting nor stopping is abrupt.
+         */
+        /*
+         * Two time constants, and the order matters: the spin has to chase the
+         * impulse faster than the impulse fades, or the fans spend every flick
+         * climbing toward a number that has already gone and never arrive.
+         */
+        scrollImpulse *= Math.exp(-delta / IMPULSE_FADE);
+        fanSpin += (scrollImpulse - fanSpin) * (1 - Math.exp(-delta / SPIN_CHASE));
+        if (fanAction) fanAction.timeScale = fanSpin * MAX_FAN_RATE;
         mixer?.update(delta);
 
         for (let i = 0; i < PARTICLE_COUNT; i++) {
@@ -494,7 +571,8 @@ export function GpuModel({
         particleGeometry.attributes.position.needsUpdate = true;
         particleGeometry.attributes.aAlpha.needsUpdate = true;
 
-        renderer.render(scene, camera);
+        if (lens) lens.render(scene, camera, delta);
+        else renderer.render(scene, camera);
       };
 
       if (still) {
