@@ -1,26 +1,53 @@
-import Link from "next/link";
+import type { NodeListing } from "@cleargate/types";
 
-export default function HomePage() {
+import { fetchNodes, sortByPrice, summarize } from "@/lib/registry";
+import { HeroSection } from "@/components/landing/hero-section";
+import { FeaturesSection } from "@/components/landing/features-section";
+import { HowItWorksSection } from "@/components/landing/how-it-works-section";
+import { PartiesSection } from "@/components/landing/parties-section";
+import { MetricsSection } from "@/components/landing/metrics-section";
+import { StackSection } from "@/components/landing/stack-section";
+import { SecuritySection } from "@/components/landing/security-section";
+import { DevelopersSection } from "@/components/landing/developers-section";
+import { AuditSection } from "@/components/landing/audit-section";
+import { PricingSection } from "@/components/landing/pricing-section";
+import { CtaSection } from "@/components/landing/cta-section";
+
+/*
+ * The counters and the price cards read the registry, and a listing goes stale
+ * the moment a node stops beating — so this page is never cached either.
+ *
+ * A registry that is down is not an error here. `fetchNodes` reports the
+ * failure instead of throwing, the metrics fall back to the protocol constants
+ * and the price cards say so. Nodes keep selling jobs either way.
+ */
+export const dynamic = "force-dynamic";
+
+/** How many price cards the pricing section shows. */
+const PRICE_CARDS = 3;
+
+export default async function HomePage() {
+  const result = await fetchNodes();
+  const nodes = result.ok ? result.nodes : [];
+
   return (
     <>
-      <h1>ClearGate</h1>
-      <p>
-        A GPU rental marketplace settled with x402 payments on Hedera testnet. Providers run a daemon
-        on an idle GPU; renters pay that machine directly, per job, and get a container run on it.
-      </p>
-
-      <h2>Have a GPU</h2>
-      <p>
-        <Link href="/provide">Get your install command</Link> — run it on the machine with the card,
-        and it appears in the list below within a few seconds.
-      </p>
-
-      <h2>Need a GPU</h2>
-      <p>
-        <Link href="/nodes">Browse listed nodes</Link>, then rent one with the{" "}
-        <code>cleargate</code> CLI. Payment goes renter to node, direct: this site never touches the
-        money.
-      </p>
+      <HeroSection />
+      <FeaturesSection />
+      <HowItWorksSection />
+      <PartiesSection />
+      <MetricsSection snapshot={result.ok ? summarize(nodes) : null} />
+      <StackSection />
+      <SecuritySection />
+      <DevelopersSection />
+      <AuditSection />
+      <PricingSection nodes={forSale(nodes).slice(0, PRICE_CARDS)} />
+      <CtaSection />
     </>
   );
+}
+
+/** Nodes a renter could actually pay right now, cheapest first. */
+function forSale(nodes: NodeListing[]): NodeListing[] {
+  return sortByPrice(nodes.filter((node) => node.online && !node.paused));
 }
