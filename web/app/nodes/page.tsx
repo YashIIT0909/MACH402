@@ -82,6 +82,19 @@ function NodeRow({ node }: { node: NodeListing }) {
         {hbar(node.price_tinybars)} HBAR
         <br />
         <span className="offline">per job</span>
+        {/* Two products on one node. A node that never opted into leasing
+            announces no lease block at all, so this row simply stays as it
+            was before leasing existed. */}
+        {node.leases === undefined ? null : (
+          <>
+            <br />
+            {hbar(node.leases.price_tinybars_per_minute)} HBAR
+            <br />
+            <span className="offline">
+              per minute, {node.leases.ssh ? "ssh + jupyter" : "jupyter only"}
+            </span>
+          </>
+        )}
       </td>
       <td className="offline">
         {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB
