@@ -1,115 +1,305 @@
 import Link from "next/link";
 import type { NodeListing } from "@cleargate/types";
 
-import { fetchNodes, REGISTRY_URL } from "@/lib/registry";
+import { fetchNodes, hbar, REGISTRY_URL } from "@/lib/registry";
+import { PageHero } from "@/components/landing/page-hero";
+import { CONTAINER } from "@/components/landing/layout";
+import { Eyebrow } from "@/components/landing/primitives";
 
 // Listings go stale the moment a node stops beating, so never cache this page.
 export const dynamic = "force-dynamic";
 
 export default async function NodesPage() {
   const result = await fetchNodes();
+  const online = result.ok ? result.nodes.filter((node) => node.online).length : 0;
 
   return (
     <>
-      <h1>Nodes</h1>
-      <p>
-        Everything a node has announced about itself, straight from the registry at{" "}
-        <code>{REGISTRY_URL}</code>. <Link href="/nodes">Refresh</Link>
-      </p>
+      <PageHero
+        eyebrow={
+          result.ok ? `${result.nodes.length} listed · ${online} online` : "Registry unreachable"
+        }
+        title="Nodes"
+      >
+        Everything a node has announced about itself. Payment goes to the account in the last
+        column, directly — the registry records where nodes are and nothing else.
+      </PageHero>
 
-      {!result.ok ? (
-        <p>
-          Could not reach the registry: <code>{result.error}</code>
-        </p>
-      ) : result.nodes.length === 0 ? (
-        <p>
-          No node has ever checked in. <Link href="/provide">List your GPU</Link> to be the first.
-        </p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Node</th>
-              <th>Status</th>
-              <th>GPU</th>
-              <th>Price</th>
-              <th>Limits</th>
-              <th>Paid to</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.nodes.map((node) => (
-              <NodeRow key={node.node_id} node={node} />
-            ))}
-          </tbody>
-        </table>
-      )}
+      <section className="py-16 lg:py-24">
+        <div className={CONTAINER}>
+          {!result.ok ? (
+            <Notice title="Could not reach the registry">
+              <p className="mb-4 font-mono text-sm break-all text-destructive">{result.error}</p>
+              <p className="text-muted-foreground">
+                The registry is expected at <Code>{REGISTRY_URL}</Code>. Start it with{" "}
+                <Code>make dev-registry</Code>, or run <Code>make dev-registry-sample</Code> for
+                fixture data. Nodes keep selling jobs either way: a registry outage never
+                interrupts a paid job.
+              </p>
+            </Notice>
+          ) : result.nodes.length === 0 ? (
+            <Notice title="Nothing listed yet">
+              <p className="text-muted-foreground">
+                No node has ever checked in.{" "}
+                <Link
+                  href="/provide"
+                  className="text-foreground underline-offset-4 hover:text-accent hover:underline"
+                >
+                  List your GPU
+                </Link>{" "}
+                to be the first — a node appears here on its first heartbeat, seconds after it
+                starts.
+              </p>
+            </Notice>
+          ) : (
+            <>
+              {/*
+               * Two renderings of the same rows. Node ids, tinybar prices and
+               * payout accounts are values a renter compares before spending
+               * money, and they compare far better column-aligned — but six
+               * columns below phone width is a sideways scroll, so the same
+               * data stacks into cards there.
+               */}
+              <div className="hidden md:block">
+                <NodeTable nodes={result.nodes} />
+              </div>
+              <div className="grid gap-px bg-foreground/10 md:hidden">
+                {result.nodes.map((node) => (
+                  <NodeCard key={node.node_id} node={node} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      {result.ok && result.nodes.length > 0 ? (
+        <section className="border-t border-foreground/10 py-16 lg:py-24">
+          <div className={CONTAINER}>
+            <Eyebrow className="mb-6">Renting one</Eyebrow>
+            <h2 className="mb-6 font-display text-4xl tracking-tight lg:text-5xl">
+              Quote first.
+              <br />
+              <span className="text-muted-foreground">It costs nothing.</span>
+            </h2>
+            <p className="mb-10 max-w-2xl text-lg text-muted-foreground">
+              <Code>/v1/specs</Code> is free on every node, because discovery that costs money is
+              discovery agents cannot do. Only <Code>cleargate run</Code> pays.
+            </p>
+
+            <div className="max-w-3xl border border-foreground/10">
+              <div className="flex items-center justify-between border-b border-foreground/10 px-6 py-4">
+                <span className="font-mono text-xs tracking-widest text-muted-foreground uppercase">
+                  terminal
+                </span>
+                <span className="flex items-center gap-2 font-mono text-xs text-accent">
+                  <span className="h-2 w-2 rounded-full bg-accent" />
+                  free until you run
+                </span>
+              </div>
+              <pre className="overflow-x-auto bg-foreground/[0.02] p-6 font-mono text-sm leading-relaxed text-foreground/80">{`cleargate quote --node <public url>
+
+cleargate run \\
+  --node <public url> \\
+  --image python:3.11-slim \\
+  --script examples/train.py \\
+  --output result.tar`}</pre>
+            </div>
+          </div>
+        </section>
+      ) : null}
     </>
   );
 }
 
-function NodeRow({ node }: { node: NodeListing }) {
+function NodeTable({ nodes }: { nodes: NodeListing[] }) {
   return (
-    <tr>
-      <td>
-        <code>{node.node_id}</code>
-        <br />
-        <span className="offline">{node.public_url}</span>
-        <br />
-        <span className="offline">agent {node.agent_version}</span>
-      </td>
-      <td>
+    <div className="overflow-x-auto border-t border-foreground/40">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr>
+            {["Node", "Status", "GPU", "Price", "Limits", "Paid to"].map((heading) => (
+              <th
+                key={heading}
+                className="py-4 pr-5 text-left font-mono text-xs font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase last:pr-0"
+              >
+                {heading}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {nodes.map((node) => (
+            <tr
+              key={node.node_id}
+              className="border-t border-foreground/10 transition-colors hover:bg-foreground/[0.03]"
+            >
+              <td className="py-5 pr-5 align-top">
+                <span className="font-mono">{node.node_id}</span>
+                <Sub mono>{node.public_url}</Sub>
+                <Sub>agent {node.agent_version}</Sub>
+              </td>
+              <td className="py-5 pr-5 align-top">
+                <Status node={node} />
+                <Sub>seen {new Date(node.last_seen_at).toLocaleTimeString()}</Sub>
+              </td>
+              <td className="py-5 pr-5 align-top">
+                <Gpu node={node} />
+              </td>
+              <td className="py-5 pr-5 align-top">
+                <span className="font-mono whitespace-nowrap">{hbar(node.price_tinybars)} HBAR</span>
+                <Sub mono>{node.price_tinybars} tinybars</Sub>
+              </td>
+              <td className="py-5 pr-5 align-top">
+                <span className="whitespace-nowrap">
+                  {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB
+                </span>
+                <Sub mono>{node.limits.max_seconds}s max</Sub>
+              </td>
+              <td className="py-5 align-top">
+                <span className="font-mono">{node.pay_to}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function NodeCard({ node }: { node: NodeListing }) {
+  return (
+    <div className="bg-background p-6">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-mono break-all">{node.node_id}</div>
+          <Sub mono>{node.public_url}</Sub>
+        </div>
         <Status node={node} />
-        <br />
-        <span className="offline">seen {new Date(node.last_seen_at).toLocaleTimeString()}</span>
-      </td>
-      <td>
-        {node.gpu.available ? (
-          <>
-            {node.gpu.model ?? "GPU"}
-            {node.gpu.vram_mb !== null && node.gpu.vram_mb !== undefined ? (
-              <>
-                <br />
-                <span className="offline">{Math.round(node.gpu.vram_mb / 1024)} GB VRAM</span>
-              </>
-            ) : null}
-          </>
-        ) : (
-          <span className="offline">CPU only</span>
+      </div>
+
+      <div className="mb-5 border-b border-foreground/10 pb-5">
+        <div className="font-display text-3xl">{hbar(node.price_tinybars)} HBAR</div>
+        <Sub mono>{node.price_tinybars} tinybars per job</Sub>
+      </div>
+
+      <dl className="space-y-3">
+        <Row label="GPU">
+          <Gpu node={node} />
+        </Row>
+        <Row label="Limits">
+          <Sub flush>
+            {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB ·{" "}
+            {node.limits.max_seconds}s max
+          </Sub>
+        </Row>
+        <Row label="Paid to">
+          <span className="font-mono text-sm">{node.pay_to}</span>
+        </Row>
+        <Row label="Seen">
+          <Sub flush>
+            {new Date(node.last_seen_at).toLocaleTimeString()} · agent {node.agent_version}
+          </Sub>
+        </Row>
+      </dl>
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <dt className="shrink-0 font-mono text-xs tracking-widest text-muted-foreground uppercase">
+        {label}
+      </dt>
+      <dd className="min-w-0 text-right">{children}</dd>
+    </div>
+  );
+}
+
+function Gpu({ node }: { node: NodeListing }) {
+  if (node.gpu.available) {
+    return (
+      <>
+        {node.gpu.model ?? "GPU"}
+        {node.gpu.vram_mb === null || node.gpu.vram_mb === undefined ? null : (
+          <Sub mono>{Math.round(node.gpu.vram_mb / 1024)} GB VRAM</Sub>
         )}
-      </td>
-      <td>
-        {hbar(node.price_tinybars)} HBAR
-        <br />
-        <span className="offline">per job</span>
-      </td>
-      <td className="offline">
-        {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB
-        <br />
-        {node.limits.max_seconds}s max
-      </td>
-      <td>
-        <code>{node.pay_to}</code>
-      </td>
-    </tr>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Sub flush>CPU-fallback mode</Sub>
+      {/* The reason is the honest part: a card that cannot be passed through
+          is advertised as no card at all. */}
+      {node.gpu.reason === undefined ? null : <Sub>{node.gpu.reason}</Sub>}
+    </>
   );
 }
 
 function Status({ node }: { node: NodeListing }) {
-  if (!node.online) return <span className="offline">offline</span>;
-  if (node.paused) return <span className="paused">paused</span>;
-  return <span className="online">available</span>;
+  const base =
+    "inline-flex items-center gap-2 font-mono text-xs tracking-widest uppercase whitespace-nowrap";
+
+  if (!node.online) {
+    return (
+      <span className={`${base} text-muted-foreground`}>
+        <span className="h-1.5 w-1.5 rounded-full border border-current" />
+        offline
+      </span>
+    );
+  }
+
+  if (node.paused) {
+    return (
+      <span className={`${base} text-warn`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        paused
+      </span>
+    );
+  }
+
+  return (
+    <span className={`${base} text-accent`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      available
+    </span>
+  );
 }
 
-/**
- * Tinybars to HBAR for display only.
- *
- * The string is split rather than divided: amounts are never parsed into floats
- * anywhere in ClearGate, and this is no exception just because it is a label.
- */
-function hbar(tinybars: string): string {
-  const padded = tinybars.padStart(9, "0");
-  const whole = padded.slice(0, -8);
-  const fraction = padded.slice(-8).replace(/0+$/, "");
-  return fraction === "" ? whole : `${whole}.${fraction}`;
+function Sub({
+  children,
+  mono = false,
+  flush = false,
+}: {
+  children: React.ReactNode;
+  mono?: boolean;
+  flush?: boolean;
+}) {
+  return (
+    <span
+      className={`block text-xs text-muted-foreground ${flush ? "" : "mt-1"} ${
+        mono ? "font-mono break-all" : ""
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Notice({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="border border-foreground/10 bg-foreground/[0.02] p-8 lg:p-10">
+      <span className="mb-4 block font-mono text-xs tracking-widest text-accent uppercase">
+        {title}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return <code className="font-mono text-[0.9em] text-foreground">{children}</code>;
 }
