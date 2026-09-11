@@ -44,6 +44,20 @@ const NODES = [
     gpu: { available: true, model: "NVIDIA GeForce RTX 4090", vram_mb: 24564 },
     limits: { max_seconds: 3600, memory_mb: 32768, cpu_cores: 8, max_artifact_mb: 2048 },
     image_allowlist: ["python:3.11-slim", "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"],
+    // Sells both products, with a lease that can actually use the card.
+    leases: {
+      price_tinybars_per_minute: "200000",
+      min_minutes: 15,
+      max_minutes: 240,
+      max_total_minutes: 1440,
+      ssh: true,
+      jupyter: true,
+      gpu: true,
+      memory_mb: 32768,
+      cpu_cores: 8,
+      workspace_gb: 64,
+      egress_allowlist: ["pypi.org", "files.pythonhosted.org", "huggingface.co"],
+    },
     online: true,
     first_seen_at: daysAgo(12),
     last_seen_at: secondsAgo(4),
@@ -62,6 +76,22 @@ const NODES = [
     gpu: { available: true, model: "NVIDIA GeForce RTX 3050 Laptop GPU", vram_mb: 4096 },
     limits: { max_seconds: 900, memory_mb: 4096, cpu_cores: 2, max_artifact_mb: 512 },
     image_allowlist: ["python:3.11-slim", "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"],
+    // The awkward case worth being able to see: an HTTP-only tunnel, so no
+    // SSH, on a lease image without CUDA, so the host's card is no use inside
+    // a lease even though `gpu.available` is true.
+    leases: {
+      price_tinybars_per_minute: "60000",
+      min_minutes: 10,
+      max_minutes: 120,
+      max_total_minutes: 480,
+      ssh: false,
+      jupyter: true,
+      gpu: false,
+      memory_mb: 4096,
+      cpu_cores: 2,
+      workspace_gb: 16,
+      egress_allowlist: ["pypi.org", "files.pythonhosted.org"],
+    },
     online: true,
     first_seen_at: daysAgo(3),
     last_seen_at: secondsAgo(11),
