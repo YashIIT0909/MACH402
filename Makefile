@@ -4,7 +4,7 @@ VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev
 LDFLAGS  := -X main.version=$(VERSION)
 
 .PHONY: help install smoke smoke-agent supported agent dev-node dev-tui cli dev-client \
-        registry-db dev-registry dev-web typecheck vet test clean
+        registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -41,6 +41,9 @@ registry-db: ## start the registry's Postgres in docker
 
 dev-registry: ## run the discovery registry on :4400
 	pnpm --filter @cleargate/registry run start
+
+dev-registry-sample: ## serve fixture nodes on :4400 for website work — no Postgres, no heartbeats
+	node scripts/sample-registry.mjs
 
 dev-web: ## run the website on :3000
 	pnpm --filter @cleargate/web run dev
