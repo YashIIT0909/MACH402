@@ -9,28 +9,31 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { Button } from "@/components/ui/button";
 import { GpuModel } from "./gpu-model";
 import { CONTAINER } from "./layout";
+import { Eyebrow } from "./primitives";
 
 gsap.registerPlugin(ScrollTrigger);
 
-/*
- * The marquee under the hero. Every figure here is a constant the code
- * actually enforces, not a marketing number — `maxTimeoutSeconds` on the 402,
- * the registry's freshness window, the sandbox flags, the count of private
- * keys a provider node holds.
+/**
+ * How much of a viewport height the cover holds for before the page moves on.
+ * Enough travel for the copy to arrive deliberately, short enough that the
+ * hero is not two full screens of scrolling on its own.
  */
-const facts = [
-  { value: "0", label: "private keys held by a node", tag: "INVARIANT" },
-  { value: "300s", label: "before a signed payment expires", tag: "MAXTIMEOUTSECONDS" },
-  { value: "90s", label: "until a silent node reads offline", tag: "HEARTBEAT" },
-  { value: "none", label: "network inside a job container", tag: "--network=none" },
-];
+const HOLD_VH = 55;
 
 /**
- * How many viewport heights of scrolling the cover holds for before the page
- * moves on. One full screen of travel: enough for the copy to arrive
- * deliberately, short enough that nobody wonders if the page is stuck.
+ * The copy's resting state, server-rendered.
+ *
+ * GSAP cannot hide these until it has hydrated, and by then the text has
+ * already been painted — so the page flashed its headline and then dropped it
+ * to reveal the card. Shipping the hidden state in the markup removes the
+ * flash; the <noscript> below puts it back for anyone without JS, who would
+ * otherwise get a blank hero.
  */
-const HOLD_VH = 100;
+const HIDDEN: React.CSSProperties = {
+  opacity: 0,
+  transform: "scale(0.965)",
+  filter: "blur(10px)",
+};
 
 export function HeroSection() {
   const sectionRef = useRef<HTMLElement>(null);
@@ -107,6 +110,11 @@ export function HeroSection() {
   return (
     <section ref={sectionRef} className="relative" style={{ height: `${100 + HOLD_VH}vh` }}>
       {/* The frame that stays put while the section scrolls past it. */}
+      <noscript>
+        {/* Without JS nothing ever reveals the copy, so undo the resting state. */}
+        <style>{`[data-reveal]{opacity:1!important;transform:none!important;filter:none!important}`}</style>
+      </noscript>
+
       <div className="sticky top-0 h-screen overflow-hidden">
         <GpuModel className="pointer-events-none absolute inset-0" progress={progress} />
 
@@ -141,72 +149,68 @@ export function HeroSection() {
           }}
         />
 
-        <div ref={copyRef} className="relative z-10 flex h-full flex-col justify-center">
-          <div className={CONTAINER}>
-            <span
-              data-reveal
-              className="mb-8 inline-flex items-center gap-3 font-mono text-sm text-muted-foreground"
-            >
-              <span className="h-px w-8 bg-foreground/30" />
-              GPU rental, settled per job
-            </span>
+        {/*
+         * The copy sits bottom-left rather than centred, and inside a column
+         * roughly half the width. Centred and full-bleed it landed exactly on
+         * the card — the two occupied the same band of the screen — so the
+         * hero read as text over a texture rather than text beside an object.
+         */}
+        <div
+          ref={copyRef}
+          className="relative z-10 flex h-full flex-col justify-end pb-20 lg:pb-28"
+        >
+          {/*
+           * `w-full` is load-bearing: CONTAINER carries `mx-auto`, and auto
+           * horizontal margins on a flex item override `align-items: stretch`,
+           * so without it the container shrink-wraps to the copy and centres
+           * itself instead of spanning the viewport.
+           */}
+          <div className={`${CONTAINER} w-full`}>
+            <div className="max-w-[34rem] lg:max-w-[44rem]">
+              <Eyebrow data-reveal style={HIDDEN} className="mb-8">
+                GPU rental, settled per job
+              </Eyebrow>
 
-            <h1
-              data-reveal
-              className="mb-12 font-display text-[clamp(2.75rem,9vw,7.5rem)] leading-[0.92] tracking-tight"
-            >
-              <span className="block">Rent the machine.</span>
-              <span className="block text-muted-foreground">
-                Pay the{" "}
-                <span className="relative inline-block text-foreground">
-                  machine
-                  <span
-                    data-accent-bar
-                    className="absolute -bottom-1 left-0 h-2 w-full bg-accent/30"
-                  />
+              <h1 data-reveal style={HIDDEN} className="type-display mb-8">
+                <span className="block">Rent the machine.</span>
+                <span className="block text-muted-foreground">
+                  Pay the{" "}
+                  <span className="relative inline-block text-foreground">
+                    machine
+                    <span
+                      data-accent-bar
+                      className="absolute -bottom-1 left-0 h-2 w-full bg-accent/30"
+                    />
+                  </span>
+                  .
                 </span>
-                .
-              </span>
-            </h1>
+              </h1>
 
-            <div className="grid items-end gap-10 lg:grid-cols-2 lg:gap-20">
-              <p data-reveal className="max-w-xl text-lg leading-relaxed text-muted-foreground lg:text-xl">
+              <p
+                data-reveal
+                style={HIDDEN}
+                className="type-lede mb-10 max-w-xl text-muted-foreground"
+              >
                 Providers run a daemon on an idle GPU. Renters — people at a terminal, or
                 autonomous agents — pay that node directly for one job and get a container run on
                 it. No API keys, no subscriptions, no escrow.
               </p>
 
-              <div data-reveal className="pointer-events-auto flex flex-col items-start gap-4 sm:flex-row">
-                <Button asChild size="lg" className="group h-14 rounded-full px-8 text-base">
+              <div
+                data-reveal
+                style={HIDDEN}
+                className="pointer-events-auto flex flex-col items-start gap-4 sm:flex-row"
+              >
+                <Button asChild size="lg" className="group">
                   <Link href="/nodes">
                     Browse nodes
-                    <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
+                    <ArrowRight className="transition-transform group-hover:translate-x-1" />
                   </Link>
                 </Button>
-                <Button asChild size="lg" variant="outline" className="h-14 rounded-full px-8 text-base">
+                <Button asChild size="lg" variant="outline">
                   <Link href="/provide">List your GPU</Link>
                 </Button>
               </div>
-            </div>
-          </div>
-
-          <div data-reveal className="absolute right-0 bottom-16 left-0">
-            <div className="marquee flex gap-16 whitespace-nowrap">
-              {[...Array(2)].map((_, i) => (
-                <div key={i} className="flex shrink-0 gap-16">
-                  {facts.map((fact) => (
-                    <div key={`${fact.tag}-${i}`} className="flex items-baseline gap-4">
-                      <span className="font-display text-4xl lg:text-5xl">{fact.value}</span>
-                      <span className="text-sm text-muted-foreground">
-                        {fact.label}
-                        <span className="mt-1 block font-mono text-xs text-foreground/40">
-                          {fact.tag}
-                        </span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ))}
             </div>
           </div>
         </div>
