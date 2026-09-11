@@ -59,52 +59,8 @@ export default function ProvidePage() {
 
       <section className="border-t border-foreground/10 py-16 lg:py-24">
         <div className={CONTAINER}>
-          <Eyebrow className="mb-6">Two products</Eyebrow>
-          <h2 className="mb-12 font-display text-4xl tracking-tight lg:text-5xl">
-            Two ways to sell,
-            <br />
-            <span className="text-muted-foreground">and they are different asks.</span>
-          </h2>
-
-          <div className="grid gap-px bg-foreground/10 md:grid-cols-2">
-            <div className="bg-background p-8 lg:p-10">
-              <span className="mb-4 block font-mono text-xs tracking-widest text-muted-foreground uppercase">
-                Batch jobs · on by default
-              </span>
-              <p className="text-muted-foreground">
-                A renter sends a script, it runs in a container with no network at all, and they
-                get the output back. Nothing of yours is reachable and nothing they send can phone
-                home.
-              </p>
-            </div>
-
-            <div className="bg-background p-8 lg:p-10">
-              <span className="mb-4 block font-mono text-xs tracking-widest text-accent uppercase">
-                Interactive leases · opt in
-              </span>
-              <p className="mb-4 text-muted-foreground">
-                This inverts it. Nothing is uploaded — a renter&apos;s code and data stay on their
-                own machine — and instead they get a shell and a Jupyter server in a container on
-                yours, for the minutes they paid for. That is a bigger thing to agree to, so it is
-                its own checkbox and its own price, never something that arrives with the GPU box.
-              </p>
-              <p className="text-muted-foreground">
-                What a lease does not expose: your filesystem, your other containers, your Docker
-                socket, or your network. The container gets a throwaway workspace wiped when the
-                lease ends, and its only route off your machine is a proxy that allows package and
-                model registries and denies everything else. Nobody gets in without a certificate
-                your machine signed, and those expire when the paid time does — the signing key
-                never leaves your box, the same way no Hedera key of yours ever does.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-foreground/10 py-16 lg:py-24">
-        <div className={CONTAINER}>
           <Eyebrow className="mb-6">Before you run it</Eyebrow>
-          <h2 className="mb-12 font-display text-4xl tracking-tight lg:text-5xl">
+          <h2 className="mb-12 type-title">
             What the machine
             <br />
             <span className="text-muted-foreground">needs.</span>
@@ -116,11 +72,11 @@ export default function ProvidePage() {
                 key={requirement.number}
                 className="grid grid-cols-[40px_1fr] gap-4 border-b border-foreground/10 py-7 lg:grid-cols-[64px_1fr] lg:gap-6"
               >
-                <span className="pt-1 font-mono text-sm text-muted-foreground">
+                <span className="pt-1 font-mono text-sm text-accent">
                   {requirement.number}
                 </span>
                 <div>
-                  <h3 className="mb-2 text-lg font-medium">{requirement.title}</h3>
+                  <h3 className="mb-2 type-heading">{requirement.title}</h3>
                   <p className="max-w-2xl text-muted-foreground">
                     {requirement.body ?? (
                       <>
@@ -142,25 +98,6 @@ export default function ProvidePage() {
         </div>
       </section>
 
-      <section className="pb-24 lg:pb-32">
-        <div className={CONTAINER}>
-          <div className="border border-foreground/10 bg-foreground/[0.02] p-8 lg:p-12">
-            <span className="mb-4 block font-mono text-xs tracking-widest text-accent uppercase">
-              The node holds no key
-            </span>
-            <p className="mb-4 max-w-2xl text-lg text-muted-foreground">
-              Nothing on this page is submitted anywhere. The registry learns about your node when
-              that node first heartbeats, not when someone fills in a form — so there is no account
-              to create, and no way to list a machine you do not control.
-            </p>
-            <p className="max-w-2xl text-lg text-muted-foreground">
-              Your daemon receives payment; it never signs. Every settlement is written to an
-              append-only <code className="font-mono text-foreground">receipts.jsonl</code> on your
-              own disk, so you can audit earnings without trusting this website.
-            </p>
-          </div>
-        </div>
-      </section>
     </>
   );
 }

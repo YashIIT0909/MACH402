@@ -14,13 +14,10 @@ const footerLinks: Record<
     { name: "Browse nodes", href: "/nodes" },
     { name: "List your GPU", href: "/provide" },
     { name: "How it works", href: "/#how-it-works" },
-    { name: "Pricing", href: "/#pricing" },
   ],
   Developers: [
     { name: "The CLI", href: "/#developers" },
     { name: "Agent API", href: "/#developers" },
-    { name: "Sandbox rules", href: "/#security" },
-    { name: "The stack", href: "/#stack" },
   ],
   Protocol: [
     { name: "x402 on Hedera", href: "https://docs.hedera.com/solutions/ai/x402", external: true },
@@ -47,8 +44,8 @@ export function FooterSection() {
           <div className="grid grid-cols-2 gap-12 md:grid-cols-6 lg:gap-8">
             <div className="col-span-2">
               <Link href="/" className="mb-6 inline-flex items-center gap-2">
-                <span className="font-display text-2xl">ClearGate</span>
-                <span className="font-mono text-xs tracking-widest text-muted-foreground uppercase">
+                <span className="type-wordmark">ClearGate</span>
+                <span className="type-label text-muted-foreground">
                   testnet
                 </span>
               </Link>
