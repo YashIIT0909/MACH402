@@ -158,3 +158,82 @@ func TestLoadMissingFileExplainsSetup(t *testing.T) {
 		t.Fatalf("the error should point at `cleargate-node setup`, got: %v", err)
 	}
 }
+
+// Leasing is opt-in per provider. A node that never asked for it must not be
+// told its lease price is malformed — the whole block is inert until Enabled.
+func TestValidateIgnoresLeasingWhenItIsOff(t *testing.T) {
+	cfg := validConfig()
+	cfg.Leases.Enabled = false
+	cfg.Leases.PriceTinybarsPerMinute = "not a number"
+	cfg.Leases.Image = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a node with leasing off should not be validated against leasing rules: %v", err)
+	}
+}
+
+func TestValidateRejectsNonIntegerLeasePrice(t *testing.T) {
+	for _, price := range []string{"0.002", "2e5", "-1", "", "abc"} {
+		cfg := validConfig()
+		cfg.Leases.Enabled = true
+		cfg.Leases.PriceTinybarsPerMinute = price
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("lease price %q should have been rejected", price)
+		}
+	}
+}
+
+func TestValidateRejectsImpossibleLeaseWindows(t *testing.T) {
+	cases := map[string]func(*Leases){
+		"max below min":       func(l *Leases) { l.MinMinutes, l.MaxMinutes = 60, 30 },
+		"zero minimum":        func(l *Leases) { l.MinMinutes = 0 },
+		"total below a slice": func(l *Leases) { l.MaxMinutes, l.MaxTotalMinutes = 120, 60 },
+		"unknown tunnel mode": func(l *Leases) { l.Tunnel.Mode = "carrier-pigeon" },
+		"no egress proxy":     func(l *Leases) { l.Egress.ProxyImage = "" },
+	}
+	for name, break_ := range cases {
+		cfg := validConfig()
+		cfg.Leases.Enabled = true
+		break_(&cfg.Leases)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("%s should have been rejected", name)
+		}
+	}
+}
+
+// A zero in a hand-written leases block is a broken setting, not a strict one:
+// max_minutes 0 refuses every lease, and grace_minutes 0 reaps a frozen
+// container the instant it freezes.
+func TestLeaseDefaultsFillInZeroedFields(t *testing.T) {
+	leases := Leases{Enabled: true}
+	leases.applyDefaults("/etc/cleargate")
+
+	fallback := DefaultLeases()
+	if leases.MaxMinutes != fallback.MaxMinutes || leases.GraceMinutes != fallback.GraceMinutes {
+		t.Fatalf("zeroed windows should have been filled in, got %+v", leases)
+	}
+	if leases.Image == "" || leases.Egress.ProxyImage == "" || len(leases.Egress.Allowlist) == 0 {
+		t.Fatalf("zeroed images and allowlist should have been filled in, got %+v", leases)
+	}
+}
+
+// Lease state has to be found relative to config.yaml, not to whatever
+// directory the node happened to be started from — a node that regenerated its
+// CA on a restart would invalidate every certificate it had already issued.
+func TestLeasePathsResolveAgainstTheConfigDirectory(t *testing.T) {
+	leases := Leases{Enabled: true}
+	leases.applyDefaults("/etc/cleargate")
+
+	if !filepath.IsAbs(leases.CAKeyPath) || !strings.HasPrefix(leases.CAKeyPath, "/etc/cleargate") {
+		t.Fatalf("ca_key_path should have resolved under the config directory, got %q", leases.CAKeyPath)
+	}
+	if !strings.HasPrefix(leases.Tunnel.ConfigDir, "/etc/cleargate") {
+		t.Fatalf("tunnel config dir should have resolved under the config directory, got %q", leases.Tunnel.ConfigDir)
+	}
+
+	// An operator who gave an absolute path meant it.
+	absolute := Leases{Enabled: true, CAKeyPath: "/var/lib/cleargate/ca"}
+	absolute.applyDefaults("/etc/cleargate")
+	if absolute.CAKeyPath != "/var/lib/cleargate/ca" {
+		t.Fatalf("an absolute ca_key_path should be left alone, got %q", absolute.CAKeyPath)
+	}
+}
