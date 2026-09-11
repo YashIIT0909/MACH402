@@ -21,3 +21,8 @@ config.yaml
 cleargate-node.log
 *.tar
 artifacts/
+
+# 3d source assets — the 12 MB Sketchfab original is the authoring copy.
+# What the site serves is the compressed build of it in web/public/models,
+# which is tracked. Keeps a one-off binary out of history forever.
+web/assets/
