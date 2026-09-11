@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { CONTAINER } from "./layout";
-import { Eyebrow, RevealedCode, useReveal } from "./primitives";
+import { Eyebrow, RevealedCode, useSectionReveal } from "./primitives";
 
 const examples = [
   {
@@ -64,7 +65,7 @@ const traits = [
 export function DevelopersSection() {
   const [activeTab, setActiveTab] = useState(0);
   const [copied, setCopied] = useState(false);
-  const { ref, revealed } = useReveal();
+  const ref = useSectionReveal<HTMLElement>();
 
   async function copy() {
     await navigator.clipboard.writeText(examples[activeTab].code);
@@ -73,21 +74,19 @@ export function DevelopersSection() {
   }
 
   return (
-    <section id="developers" ref={ref} className="relative overflow-hidden py-24 lg:py-32">
+    <section id="developers" ref={ref} className="relative overflow-hidden py-16 lg:py-24">
       <div className={CONTAINER}>
         <div className="grid items-start gap-16 lg:grid-cols-2 lg:gap-24">
           <div
-            className={`transition-all duration-700 ${
-              revealed ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
-            }`}
+            data-reveal
           >
             <Eyebrow className="mb-6">For developers</Eyebrow>
-            <h2 className="mb-8 font-display text-4xl tracking-tight lg:text-6xl">
+            <h2 className="mb-8 type-title">
               Built for agents.
               <br />
               <span className="text-muted-foreground">Usable by people.</span>
             </h2>
-            <p className="mb-12 text-xl leading-relaxed text-muted-foreground">
+            <p className="mb-12 type-lede text-muted-foreground">
               An autonomous buyer cannot sign up, cannot hold an API key, and cannot pay for a quote
               it has not decided to accept yet. Everything here follows from that: free discovery, a
               402 that says exactly what it wants, and one signature.
@@ -97,9 +96,7 @@ export function DevelopersSection() {
               {traits.map((trait, index) => (
                 <div
                   key={trait.title}
-                  className={`transition-all duration-500 ${
-                    revealed ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
-                  }`}
+                  data-reveal
                   style={{ transitionDelay: `${index * 50 + 200}ms` }}
                 >
                   <h3 className="mb-1 font-medium">{trait.title}</h3>
@@ -110,38 +107,37 @@ export function DevelopersSection() {
           </div>
 
           <div
-            className={`transition-all delay-200 duration-700 lg:sticky lg:top-32 ${
-              revealed ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0"
-            }`}
+            data-reveal className="lg:sticky lg:top-32"
           >
             <div className="border border-foreground/10">
               <div className="flex items-center border-b border-foreground/10">
                 {examples.map((example, index) => (
-                  <button
+                  <Button
                     key={example.label}
-                    type="button"
+                    variant="quiet"
+                    shape="square"
                     onClick={() => setActiveTab(index)}
-                    className={`relative px-6 py-4 font-mono text-sm transition-colors ${
-                      activeTab === index
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
+                    aria-pressed={activeTab === index}
+                    className={`relative h-auto px-6 py-4 font-mono ${
+                      activeTab === index ? "text-accent" : ""
                     }`}
                   >
                     {example.label}
                     {activeTab === index ? (
                       <span className="absolute right-0 bottom-0 left-0 h-px bg-accent" />
                     ) : null}
-                  </button>
+                  </Button>
                 ))}
                 <div className="flex-1" />
-                <button
-                  type="button"
+                <Button
+                  variant="quiet"
+                  shape="square"
                   onClick={() => void copy()}
-                  className="px-4 py-4 text-muted-foreground transition-colors hover:text-foreground"
+                  className="h-auto px-4 py-4"
                   aria-label="Copy this snippet"
                 >
-                  {copied ? <Check className="h-4 w-4 text-accent" /> : <Copy className="h-4 w-4" />}
-                </button>
+                  {copied ? <Check className="text-accent" /> : <Copy />}
+                </Button>
               </div>
 
               <div className="min-h-[240px] overflow-x-auto bg-foreground/[0.02] p-8 font-mono text-sm">

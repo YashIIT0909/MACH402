@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Instrument_Sans, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
 
 import { Navigation } from "@/components/landing/navigation";
 import { FooterSection } from "@/components/landing/footer-section";
@@ -7,25 +7,28 @@ import { FooterSection } from "@/components/landing/footer-section";
 import "./globals.css";
 
 /*
- * Three typefaces, exposed to globals.css as CSS variables: a serif for display
- * headings, a sans for prose, and a monospace for machine-produced values —
- * node ids, Hedera accounts, tinybar amounts, image tags.
+ * Two typefaces, with one job each.
+ *
+ * IBM Plex Sans carries everything a person reads as prose — headings, ledes,
+ * paragraphs. JetBrains Mono carries everything a machine produced or that
+ * labels something: node ids, Hedera accounts, tinybar amounts, image tags,
+ * navigation, section labels. That split is the site's oldest rule and the
+ * reason it is legible at a glance which values are data.
+ *
+ * Plex is the deliberate pair for Plex Mono's sibling; it sits beside JetBrains
+ * Mono without either looking borrowed, and it holds up at the small sizes the
+ * tables need.
  */
-const sans = Instrument_Sans({
+const sans = IBM_Plex_Sans({
   subsets: ["latin"],
-  variable: "--font-instrument",
-  display: "swap",
-});
-
-const serif = Instrument_Serif({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-instrument-serif",
+  weight: ["400", "500", "600"],
+  variable: "--font-plex",
   display: "swap",
 });
 
 const mono = JetBrains_Mono({
   subsets: ["latin"],
+  weight: ["400", "500"],
   variable: "--font-jetbrains",
   display: "swap",
 });
@@ -37,10 +40,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body
-        className={`${sans.variable} ${serif.variable} ${mono.variable} font-sans antialiased`}
-      >
+    /*
+     * The font variables go on <html>, not <body>: the face stacks in
+     * globals.css are declared on :root, and a custom property there cannot
+     * resolve one that is only defined on a descendant. With them on <body>
+     * every one of those stacks computed to nothing and inherited the body
+     * face instead.
+     */
+    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+      <body className="font-sans antialiased">
         {/*
           * `overflow-x: clip`, not `hidden`. Both stop sideways scrolling, but
           * `hidden` makes this a scroll container, which silently kills

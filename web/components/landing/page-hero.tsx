@@ -46,12 +46,12 @@ export function PageHero({
           {eyebrow}
         </span>
 
-        <h1 className="font-display text-[clamp(2.75rem,9vw,7rem)] leading-[0.92] tracking-tight">
+        <h1 className="type-display">
           {title}
         </h1>
 
         {children ? (
-          <div className="mt-8 max-w-2xl text-xl leading-relaxed text-muted-foreground">
+          <div className="mt-8 max-w-2xl type-lede text-muted-foreground">
             {children}
           </div>
         ) : null}

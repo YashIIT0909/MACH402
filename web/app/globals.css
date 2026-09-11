@@ -26,7 +26,7 @@
   --background: #08090a;
   --foreground: #ededec;
   --muted: #16181a;
-  --muted-foreground: #8a8a85;
+  --muted-foreground: #a5a5a0;
 
   /*
    * Raised surfaces. Optimus flips to `bg-foreground text-background` for its
@@ -66,12 +66,42 @@
   --ring: #00e87a;
 
   --radius: 0.25rem;
+
+  /*
+   * The three faces, as real custom properties.
+   *
+   * `@theme inline` below does NOT emit its tokens as runtime variables — it
+   * substitutes them into Tailwind's own utilities at build time. So a
+   * hand-written rule saying `font-family: var(--font-display)` resolves to
+   * nothing and silently inherits the body face, which is how every heading
+   * and every mono label on this site ended up rendering in Instrument Sans.
+   * Anything outside a Tailwind utility must use these.
+   */
+  --face-sans: var(--font-plex), "IBM Plex Sans", system-ui, sans-serif;
+  --face-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+
+  /*
+   * Motion. Three durations and one curve, so a hover, a state change and a
+   * section entrance are related rather than each picked by feel — the page
+   * had four unrelated durations chosen per site before this.
+   */
+  --dur-quick: 180ms;
+  --dur-base: 300ms;
+  --dur-slow: 560ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @theme inline {
-  --font-sans: var(--font-instrument), "Instrument Sans", system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
-  --font-display: var(--font-instrument-serif), "Instrument Serif", Georgia, serif;
+  /*
+   * The bottom of the scale, lifted. Tailwind's 12px/14px defaults read as
+   * faint on a near-black ground, and most of the site's data and labels live
+   * down here — so the whole small end moves rather than each call site.
+   */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+
+  --font-sans: var(--face-sans);
+  --font-mono: var(--face-mono);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -111,6 +141,8 @@
   body {
     background: var(--background);
     color: var(--foreground);
+    font-size: 1.0625rem;
+    line-height: 1.6;
   }
 
   html {
@@ -129,40 +161,124 @@
   }
 }
 
+
+/* --------------------------------------------------------------- type */
+
+/*
+ * Five steps, and every piece of text on the site picks one.
+ *
+ * Before this a section heading could be any of text-2xl, 3xl, 4xl, 5xl or
+ * 6xl depending on which section you were in, and the two page heroes used
+ * clamps that differed by half a rem for no reason. Each step carries its own
+ * family, leading and tracking, so a heading cannot be half-applied.
+ */
 @layer utilities {
-  .font-display {
-    font-family: var(--font-display);
+  .type-display {
+    font-family: var(--face-sans);
+    font-size: clamp(2.5rem, 6.4vw, 5rem);
+    line-height: 0.92;
+    letter-spacing: -0.02em;
   }
 
+  .type-title {
+    font-family: var(--face-sans);
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    line-height: 1.05;
+    letter-spacing: -0.015em;
+  }
+
+  .type-subtitle {
+    font-family: var(--face-sans);
+    font-size: clamp(1.5rem, 1.9vw, 2rem);
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+  }
+
+  .type-heading {
+    font-size: 1.1875rem;
+    line-height: 1.4;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+  }
+
+  .type-lede {
+    font-size: clamp(1.125rem, 1.5vw, 1.375rem);
+    line-height: 1.6;
+  }
+
+  .type-body {
+    font-size: 1.0625rem;
+    line-height: 1.6;
+  }
+
+  /*
+   * Navigation. Related to the label step but heavier and a shade larger —
+   * a label describes something nearby, a nav item is a target you have to be
+   * able to read and hit, and at label weight it was too faint to do either.
+   */
+  .type-nav {
+    font-family: var(--face-mono);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Anything a machine produced, and every small caps label. */
+  .type-label {
+    font-family: var(--face-mono);
+    font-size: 0.8125rem;
+    line-height: 1.2;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* Figures read at a glance: prices, stat values, marquee facts. */
+  .type-stat {
+    font-family: var(--face-mono);
+    font-size: clamp(1.875rem, 2.6vw, 2.75rem);
+    line-height: 1.05;
+    letter-spacing: -0.015em;
+  }
+
+  /* The brand mark, which is a fixed size and not part of the scale. */
+  .type-wordmark {
+    font-family: var(--face-sans);
+    font-size: 1.5rem;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  /* The live counters, and nothing else. */
+  .type-metric {
+    font-family: var(--face-mono);
+    font-size: clamp(3rem, 6vw, 5.5rem);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .ease-brand {
+    transition-timing-function: var(--ease-out);
+  }
+
+  .dur-quick {
+    transition-duration: var(--dur-quick);
+  }
+
+  .dur-base {
+    transition-duration: var(--dur-base);
+  }
+
+  .dur-slow {
+    transition-duration: var(--dur-slow);
+  }
+}
+
+@layer utilities {
   .text-stroke {
     -webkit-text-stroke: 1.5px currentColor;
     -webkit-text-fill-color: transparent;
-  }
-
-  .marquee {
-    animation: marquee 30s linear infinite;
-  }
-
-  .marquee-reverse {
-    animation: marquee-reverse 25s linear infinite;
-  }
-
-  @keyframes marquee {
-    0% {
-      transform: translateX(0);
-    }
-    100% {
-      transform: translateX(-50%);
-    }
-  }
-
-  @keyframes marquee-reverse {
-    0% {
-      transform: translateX(-50%);
-    }
-    100% {
-      transform: translateX(0);
-    }
   }
 
   .animate-char-in {
@@ -239,8 +355,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .marquee,
-  .marquee-reverse,
   .animate-char-in,
   .code-line-reveal,
   .code-char-reveal {

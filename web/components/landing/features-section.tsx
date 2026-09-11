@@ -1,7 +1,7 @@
 "use client";
 
 import { CONTAINER } from "./layout";
-import { Eyebrow, useReveal } from "./primitives";
+import { Eyebrow, useSectionReveal } from "./primitives";
 
 const features = [
   {
@@ -221,32 +221,24 @@ function AnimatedVisual({ type }: { type: string }) {
   }
 }
 
-function FeatureCard({ feature, index }: { feature: (typeof features)[number]; index: number }) {
-  const { ref, revealed } = useReveal(0.2);
-
+function FeatureCard({ feature }: { feature: (typeof features)[number] }) {
   return (
-    <div
-      ref={ref}
-      className={`group relative transition-all duration-700 ${
-        revealed ? "translate-y-0 opacity-100" : "translate-y-12 opacity-0"
-      }`}
-      style={{ transitionDelay: `${index * 100}ms` }}
-    >
-      <div className="flex flex-col gap-8 border-b border-foreground/10 py-12 lg:flex-row lg:gap-16 lg:py-20">
+    <div data-reveal className="group relative">
+      <div className="flex flex-col gap-6 border-b border-foreground/10 py-12 lg:flex-row lg:gap-16 lg:py-20">
         <div className="shrink-0">
-          <span className="font-mono text-sm text-muted-foreground">{feature.number}</span>
+          <span className="font-mono text-sm text-accent">{feature.number}</span>
         </div>
 
         <div className="grid flex-1 items-center gap-8 lg:grid-cols-2">
           <div>
-            <h3 className="mb-4 font-display text-3xl transition-transform duration-500 group-hover:translate-x-2 lg:text-4xl">
+            <h3 className="type-subtitle mb-3 transition-transform ease-brand dur-slow group-hover:translate-x-2">
               {feature.title}
             </h3>
-            <p className="text-lg leading-relaxed text-muted-foreground">{feature.description}</p>
+            <p className="text-muted-foreground">{feature.description}</p>
           </div>
 
           <div className="flex justify-center lg:justify-end">
-            <div className="h-40 w-48 text-foreground/80 transition-colors duration-500 group-hover:text-accent">
+            <div className="h-32 w-40 text-foreground/80 transition-colors ease-brand dur-slow group-hover:text-accent">
               <AnimatedVisual type={feature.visual} />
             </div>
           </div>
@@ -257,17 +249,15 @@ function FeatureCard({ feature, index }: { feature: (typeof features)[number]; i
 }
 
 export function FeaturesSection() {
-  const { ref, revealed } = useReveal();
+  const ref = useSectionReveal<HTMLElement>();
 
   return (
-    <section id="features" ref={ref} className="relative py-24 lg:py-32">
+    <section id="features" ref={ref} className="relative py-16 lg:py-24">
       <div className={CONTAINER}>
-        <div className="mb-16 lg:mb-24">
+        <div className="mb-10 lg:mb-14">
           <Eyebrow className="mb-6">Capabilities</Eyebrow>
           <h2
-            className={`font-display text-4xl tracking-tight transition-all duration-700 lg:text-6xl ${
-              revealed ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
-            }`}
+            data-reveal className="type-title"
           >
             Everything it does.
             <br />
@@ -276,8 +266,8 @@ export function FeaturesSection() {
         </div>
 
         <div>
-          {features.map((feature, index) => (
-            <FeatureCard key={feature.number} feature={feature} index={index} />
+          {features.map((feature) => (
+            <FeatureCard key={feature.number} feature={feature} />
           ))}
         </div>
       </div>

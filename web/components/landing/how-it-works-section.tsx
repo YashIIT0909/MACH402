@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { CONTAINER } from "./layout";
-import { Eyebrow, RevealedCode, useReveal } from "./primitives";
+import { Eyebrow, RevealedCode, useSectionReveal, useSeen } from "./primitives";
 
 const steps = [
   {
@@ -74,17 +75,18 @@ const ROTATE_MS = 6000;
 
 export function HowItWorksSection() {
   const [activeStep, setActiveStep] = useState(0);
-  const { ref, revealed } = useReveal();
+  const ref = useSectionReveal<HTMLElement>();
+  const seen = useSeen(ref);
 
   // Rotation starts only once the section is on screen, so a reader arriving
   // late does not land mid-cycle on a step they never saw begin.
   useEffect(() => {
-    if (!revealed) return;
+    if (!seen) return;
     const interval = setInterval(() => {
       setActiveStep((prev) => (prev + 1) % steps.length);
     }, ROTATE_MS);
     return () => clearInterval(interval);
-  }, [revealed]);
+  }, [seen]);
 
   const active = steps[activeStep];
 
@@ -92,17 +94,15 @@ export function HowItWorksSection() {
     <section
       id="how-it-works"
       ref={ref}
-      className="relative overflow-hidden border-y border-foreground/10 bg-panel py-24 lg:py-32"
+      className="relative overflow-hidden border-y border-foreground/10 bg-panel py-16 lg:py-24"
     >
       <div className="hatch pointer-events-none absolute inset-0 opacity-[0.035]" />
 
       <div className={`relative z-10 ${CONTAINER}`}>
-        <div className="mb-16 lg:mb-24">
+        <div className="mb-10 lg:mb-14">
           <Eyebrow className="mb-6">How a job is paid for</Eyebrow>
           <h2
-            className={`font-display text-4xl tracking-tight transition-all duration-700 lg:text-6xl ${
-              revealed ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
-            }`}
+            data-reveal className="type-title"
           >
             Four steps, one of which
             <br />
@@ -113,24 +113,26 @@ export function HowItWorksSection() {
         <div className="grid gap-16 lg:grid-cols-2 lg:gap-24">
           <div className="space-y-0">
             {steps.map((step, index) => (
-              <button
+              <Button
                 key={step.number}
-                type="button"
+                variant="quiet"
+                shape="square"
                 onClick={() => setActiveStep(index)}
-                className={`group w-full border-b border-foreground/10 py-8 text-left transition-all duration-500 ${
+                aria-pressed={activeStep === index}
+                className={`group h-auto w-full justify-start border-b border-foreground/10 px-0 py-6 text-left whitespace-normal hover:bg-transparent ${
                   activeStep === index ? "opacity-100" : "opacity-40 hover:opacity-70"
                 }`}
               >
                 <div className="flex items-start gap-6">
                   <span
-                    className={`font-display text-3xl transition-colors duration-500 ${
+                    className={`font-mono text-3xl transition-colors ease-brand dur-slow ${
                       activeStep === index ? "text-accent" : "text-foreground/30"
                     }`}
                   >
                     {step.number}
                   </span>
                   <div className="flex-1">
-                    <h3 className="mb-3 font-display text-2xl transition-transform duration-300 group-hover:translate-x-2 lg:text-3xl">
+                    <h3 className="type-subtitle mb-2 transition-transform ease-brand dur-base group-hover:translate-x-2">
                       {step.title}
                     </h3>
                     <p className="leading-relaxed text-muted-foreground">{step.description}</p>
@@ -146,7 +148,7 @@ export function HowItWorksSection() {
                     ) : null}
                   </div>
                 </div>
-              </button>
+              </Button>
             ))}
           </div>
 

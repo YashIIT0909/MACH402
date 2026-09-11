@@ -7,10 +7,10 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AnimatedTetrahedron } from "./ascii-canvas";
 import { CONTAINER } from "./layout";
-import { useReveal } from "./primitives";
+import { useSectionReveal } from "./primitives";
 
 export function CtaSection() {
-  const { ref, revealed } = useReveal(0.2);
+  const ref = useSectionReveal<HTMLElement>();
   const [mouse, setMouse] = useState({ x: 50, y: 50 });
 
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -22,31 +22,29 @@ export function CtaSection() {
   };
 
   return (
-    <section ref={ref} className="relative overflow-hidden py-24 lg:py-32">
+    <section ref={ref} className="relative overflow-hidden py-16 lg:py-24">
       <div className={CONTAINER}>
         <div
-          className={`relative border border-foreground/40 transition-all duration-1000 ${
-            revealed ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
-          }`}
+          data-reveal className="relative border border-foreground/40"
           onMouseMove={handleMouseMove}
         >
           <div
-            className="pointer-events-none absolute inset-0 opacity-40 transition-opacity duration-300"
+            className="pointer-events-none absolute inset-0 opacity-40 transition-opacity ease-brand dur-base"
             style={{
               background: `radial-gradient(600px circle at ${mouse.x}% ${mouse.y}%, rgba(0, 232, 122, 0.06), transparent 40%)`,
             }}
           />
 
-          <div className="relative z-10 px-8 py-16 lg:px-16 lg:py-24">
+          <div className="relative z-10 px-8 py-12 lg:px-14 lg:py-16">
             <div className="flex flex-col items-center justify-between gap-12 lg:flex-row">
               <div className="flex-1">
-                <h2 className="mb-8 font-display text-4xl leading-[0.95] tracking-tight lg:text-7xl">
+                <h2 className="type-title mb-8">
                   Someone&apos;s GPU
                   <br />
                   is idle right now.
                 </h2>
 
-                <p className="mb-12 max-w-xl text-xl leading-relaxed text-muted-foreground">
+                <p className="mb-8 max-w-xl type-lede text-muted-foreground">
                   Rent one for the length of a job, or put yours to work between your own runs.
                   Either side takes a few minutes and neither side signs up for anything.
                 </p>

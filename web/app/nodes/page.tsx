@@ -77,19 +77,19 @@ export default async function NodesPage() {
         <section className="border-t border-foreground/10 py-16 lg:py-24">
           <div className={CONTAINER}>
             <Eyebrow className="mb-6">Renting one</Eyebrow>
-            <h2 className="mb-6 font-display text-4xl tracking-tight lg:text-5xl">
+            <h2 className="mb-6 type-title">
               Quote first.
               <br />
               <span className="text-muted-foreground">It costs nothing.</span>
             </h2>
-            <p className="mb-10 max-w-2xl text-lg text-muted-foreground">
+            <p className="mb-10 max-w-2xl type-lede text-muted-foreground">
               <Code>/v1/specs</Code> is free on every node, because discovery that costs money is
               discovery agents cannot do. Only <Code>cleargate run</Code> pays.
             </p>
 
             <div className="max-w-3xl border border-foreground/10">
               <div className="flex items-center justify-between border-b border-foreground/10 px-6 py-4">
-                <span className="font-mono text-xs tracking-widest text-muted-foreground uppercase">
+                <span className="type-label text-muted-foreground">
                   terminal
                 </span>
                 <span className="flex items-center gap-2 font-mono text-xs text-accent">
@@ -121,7 +121,7 @@ function NodeTable({ nodes }: { nodes: NodeListing[] }) {
             {["Node", "Status", "GPU", "Price", "Limits", "Paid to"].map((heading) => (
               <th
                 key={heading}
-                className="py-4 pr-5 text-left font-mono text-xs font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase last:pr-0"
+                className="type-label py-4 pr-5 text-left font-medium whitespace-nowrap text-muted-foreground last:pr-0"
               >
                 {heading}
               </th>
@@ -132,7 +132,7 @@ function NodeTable({ nodes }: { nodes: NodeListing[] }) {
           {nodes.map((node) => (
             <tr
               key={node.node_id}
-              className="border-t border-foreground/10 transition-colors hover:bg-foreground/[0.03]"
+              className="border-t border-foreground/10 transition-colors ease-brand dur-base hover:bg-accent/[0.04]"
             >
               <td className="py-5 pr-5 align-top">
                 <span className="font-mono">{node.node_id}</span>
@@ -183,7 +183,7 @@ function NodeCard({ node }: { node: NodeListing }) {
       </div>
 
       <div className="mb-5 border-b border-foreground/10 pb-5">
-        <div className="font-display text-3xl">{hbar(node.price_tinybars)} HBAR</div>
+        <div className="type-stat">{hbar(node.price_tinybars)} HBAR</div>
         <Sub mono>{node.price_tinybars} tinybars per job</Sub>
         <Lease node={node} />
       </div>
@@ -214,7 +214,7 @@ function NodeCard({ node }: { node: NodeListing }) {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <dt className="shrink-0 font-mono text-xs tracking-widest text-muted-foreground uppercase">
+      <dt className="shrink-0 type-label text-muted-foreground">
         {label}
       </dt>
       <dd className="min-w-0 text-right">{children}</dd>
@@ -272,7 +272,7 @@ function Gpu({ node }: { node: NodeListing }) {
 
 function Status({ node }: { node: NodeListing }) {
   const base =
-    "inline-flex items-center gap-2 font-mono text-xs tracking-widest uppercase whitespace-nowrap";
+    "type-label inline-flex items-center gap-2 whitespace-nowrap";
 
   if (!node.online) {
     return (
@@ -323,7 +323,7 @@ function Sub({
 function Notice({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="border border-foreground/10 bg-foreground/[0.02] p-8 lg:p-10">
-      <span className="mb-4 block font-mono text-xs tracking-widest text-accent uppercase">
+      <span className="mb-4 block type-label text-accent">
         {title}
       </span>
       {children}

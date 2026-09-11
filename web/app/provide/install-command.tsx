@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 // Where the installer itself lives. Fetched fresh on every run rather than
@@ -55,7 +56,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
   return (
     <div className="grid gap-px bg-foreground/10 lg:grid-cols-2">
       <div className="bg-background p-8 lg:p-12">
-        <span className="mb-8 block font-mono text-xs tracking-widest text-muted-foreground uppercase">
+        <span className="mb-8 block type-label text-muted-foreground">
           Your details
         </span>
 
@@ -136,18 +137,20 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
       </div>
 
       <div className="bg-background p-8 lg:p-12">
-        <span className="mb-8 block font-mono text-xs tracking-widest text-muted-foreground uppercase">
+        <span className="mb-8 block type-label text-muted-foreground">
           Run this in your terminal
         </span>
 
         <div className="border border-foreground/10">
           <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-5 py-3">
-            <span className="font-mono text-xs tracking-widest text-muted-foreground uppercase">
+            <span className="type-label text-muted-foreground">
               install command
             </span>
-            <button
+            <Button
+              variant="accent"
+              size="sm"
               onClick={() => void copy()}
-              className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-1.5 font-mono text-[0.625rem] tracking-widest text-primary-foreground uppercase transition-colors hover:bg-primary/90"
+              className="type-label h-7 px-4"
             >
               {copied ? (
                 <>
@@ -158,7 +161,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
                   Copy <Copy className="h-3 w-3" />
                 </>
               )}
-            </button>
+            </Button>
           </div>
           <pre className="overflow-x-auto bg-foreground/[0.02] p-5 font-mono text-sm leading-relaxed text-foreground/85">
             {command}
@@ -189,7 +192,7 @@ function Field({
 }) {
   return (
     <label className="mb-6 block">
-      <span className="mb-2 block font-mono text-xs tracking-widest text-muted-foreground uppercase">
+      <span className="mb-2 block type-label text-muted-foreground">
         {label}
       </span>
       {children}
