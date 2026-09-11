@@ -59,6 +59,29 @@ export const heartbeatSchema = z.object({
     max_artifact_mb: z.number().int().positive(),
   }),
   image_allowlist: z.array(shortText).max(64),
+  /**
+   * Absent on a node that does not sell interactive leases, which is the
+   * default. Every number is bounded for the same reason the rest of this file
+   * bounds things: the website renders it, and a hostile node would otherwise
+   * choose what it says.
+   */
+  leases: z
+    .object({
+      price_tinybars_per_minute: z
+        .string()
+        .regex(/^\d{1,20}$/, "price_tinybars_per_minute must be a whole number of tinybars, as a string"),
+      min_minutes: z.number().int().positive().max(10_080),
+      max_minutes: z.number().int().positive().max(10_080),
+      max_total_minutes: z.number().int().positive().max(525_600),
+      ssh: z.boolean(),
+      jupyter: z.boolean(),
+      gpu: z.boolean(),
+      memory_mb: z.number().int().positive().max(10_000_000),
+      cpu_cores: z.number().int().positive().max(1024),
+      workspace_gb: z.number().int().nonnegative().max(1_000_000),
+      egress_allowlist: z.array(shortText).max(256),
+    })
+    .optional(),
 });
 
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
