@@ -1,0 +1,10 @@
+{
+  "network": "hederaTestnet",
+  "chainId": 296,
+  "deployedAt": "2026-09-11T16:35:27.805Z",
+  "deployer": "0xcB41addf66bC21045FEC301ddE313e7F336aD942",
+  "contracts": {
+    "SessionEscrow": "0xD583D91742F8888F5b106C3f3C854eaCD7DB7143",
+    "IdentityRegistry": "0xe03429b77841f8a45Cc85EBFf3f30B70CcbA07D1"
+  }
+}
