@@ -11,6 +11,10 @@ import type {
   LeaseSpec,
   LeaseState,
   NodeSpec,
+  SessionCreated,
+  SessionQuote,
+  SessionSpec,
+  SessionState,
   SettleResponse,
 } from "@cleargate/types";
 import { payFor, type Payer } from "./pay.js";
@@ -113,6 +117,102 @@ export class NodeClient {
     return (await response.json()) as LeaseState;
   }
 
+  /**
+   * Asks the node what an escrow session would cost, without paying.
+   *
+   * The node answers 402 with its terms rather than an x402 challenge, because
+   * there is no transfer for anyone to sign: the renter deposits at the
+   * contract themselves and comes back with the transaction id.
+   */
+  async quoteSession(spec: SessionSpec): Promise<SessionQuote> {
+    const response = await fetch(`${this.baseUrl}/v1/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec),
+    });
+
+    if (response.status === 404) {
+      throw new Error("this node does not offer escrow-backed sessions");
+    }
+    if (response.status !== 402) {
+      throw new Error(await describeFailure(response, "quoting a session"));
+    }
+
+    const body = (await response.json()) as { quote?: SessionQuote; error?: string };
+    if (!body.quote) {
+      throw new Error(`this node's session quote was malformed: ${body.error ?? "no quote"}`);
+    }
+    return body.quote;
+  }
+
+  /**
+   * Claims a session the renter has already funded on-chain.
+   *
+   * The proof is a transaction id, not a signed payload: the deposit is final
+   * on Hedera consensus before this is called, and the node verifies it by
+   * reading the public mirror node.
+   */
+  async claimSession(
+    spec: SessionSpec,
+    sessionId: string,
+    depositTransaction: string,
+  ): Promise<SessionCreated> {
+    const response = await fetch(`${this.baseUrl}/v1/sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "PAYMENT-DEPOSIT": depositTransaction,
+        "PAYMENT-SESSION": sessionId,
+      },
+      body: JSON.stringify(spec),
+    });
+
+    if (!response.ok) {
+      // The deposit is already in the contract at this point, so say what to do
+      // about it rather than only what went wrong.
+      throw new Error(
+        `${await describeFailure(response, "claiming the session")}\n` +
+          `Your deposit is still in the escrow contract; run \`cleargate settle --session ${sessionId}\` to recover it.`,
+      );
+    }
+    return (await response.json()) as SessionCreated;
+  }
+
+  /** Free: tells the node to re-read the contract after an on-chain top-up. */
+  async topUpSession(sessionId: string, token: string): Promise<SessionState> {
+    const response = await fetch(`${this.baseUrl}/v1/sessions/${sessionId}/topup`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(await describeFailure(response, "topping up the session"));
+    }
+    return (await response.json()) as SessionState;
+  }
+
+  /** Free: what the auto-top-up loop polls. */
+  async sessionState(sessionId: string, token: string): Promise<SessionState> {
+    return (await this.authorized(`/v1/sessions/${sessionId}`, token).then((r) =>
+      r.json(),
+    )) as SessionState;
+  }
+
+  /**
+   * Free: ends the session. Unlike stopping a lease, this is what triggers the
+   * refund — the node closes the contract if it can, and the renter's own
+   * `settle` closes it if the node cannot.
+   */
+  async stopSession(sessionId: string, token: string): Promise<SessionState> {
+    const response = await fetch(`${this.baseUrl}/v1/sessions/${sessionId}/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(await describeFailure(response, "stopping the session"));
+    }
+    return (await response.json()) as SessionState;
+  }
+
   async state(jobId: string, token: string): Promise<JobState> {
     return (await this.authorized(`/v1/jobs/${jobId}`, token).then((r) => r.json())) as JobState;
   }
@@ -189,6 +289,26 @@ export class NodeClient {
     }
     return response;
   }
+}
+
+/**
+ * Turns a node's error response into something a renter can act on.
+ *
+ * The node puts a human-readable reason in the body — which field of a deposit
+ * disagreed with the quote, say — and losing that to a bare status code would
+ * leave someone staring at "402" with no idea what to change.
+ */
+async function describeFailure(response: Response, what: string): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await response.json()) as { error?: string };
+    detail = body.error ?? "";
+  } catch {
+    // A node that answered with something other than JSON: the status is all
+    // there is, which is still better than nothing.
+  }
+  const suffix = detail ? `: ${detail}` : "";
+  return `${what} failed (${response.status} ${response.statusText})${suffix}`;
 }
 
 export type LogLine = { stream: string; text: string };

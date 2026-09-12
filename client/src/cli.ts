@@ -17,8 +17,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { Command } from "commander";
-import type { JobSpec, LeaseCreated, LeaseSpec } from "@cleargate/types";
-import { formatTinybars, hashscanUrl, isLeaseTerminal } from "@cleargate/types";
+import type { JobSpec, LeaseCreated, LeaseSpec, SessionSpec } from "@cleargate/types";
+import { formatTinybars, hashscanUrl, isLeaseTerminal, isSessionTerminal } from "@cleargate/types";
+import { EscrowClient } from "./escrow.js";
 import { createPayer } from "./pay.js";
 import {
   colabUrl,
@@ -162,6 +163,37 @@ program
       `you paid for ${state.paid_minutes} minutes; time already bought is not refunded, ` +
         "but nothing further will be charged",
     );
+  });
+
+program
+  .command("session")
+  .description("rent a GPU by the second, with the unused time refunded when you stop")
+  .requiredOption("-n, --node <url>", "node base URL")
+  .option("-m, --minutes <n>", "minutes to buy up front", parseIntArg, 15)
+  .option("-g, --gpu", "require a GPU")
+  .option("--budget <tinybars>", "stop topping up before total deposits pass this", parseIntArg)
+  .option("--top-up-minutes <n>", "minutes to add each time (default: same as --minutes)", parseIntArg)
+  .option("--no-top-up", "let the session lapse instead of topping it up")
+  .option("--local-port <port>", "local port for the forwarded Jupyter", parseIntArg, 8888)
+  .action(async (options: SessionCommandOptions) => {
+    await session({
+      node: options.node,
+      minutes: options.minutes,
+      gpu: options.gpu,
+      budget: options.budget,
+      topUpMinutes: options.topUpMinutes,
+      topUp: options.topUp,
+      localPort: options.localPort,
+    });
+  });
+
+program
+  .command("settle")
+  .description("close an escrow session on-chain and collect your refund")
+  .requiredOption("-n, --node <url>", "node the session was rented from")
+  .requiredOption("-s, --session <id>", "session id")
+  .action(async (options: { node: string; session: string }) => {
+    await settleSession(options.node, options.session);
   });
 
 program
@@ -520,6 +552,329 @@ async function holdLease(args: {
 /** Buy the next slice once this little time is left on the current one. */
 const EXTEND_THRESHOLD_SECONDS = 60;
 const POLL_INTERVAL_MS = 10_000;
+
+
+type SessionCommandOptions = {
+  node: string;
+  minutes: number;
+  gpu?: boolean;
+  budget?: number;
+  topUpMinutes?: number;
+  topUp: boolean;
+  localPort: number;
+};
+
+type SessionOptions = {
+  node: string;
+  minutes: number;
+  gpu?: boolean;
+  budget?: number;
+  topUpMinutes?: number;
+  topUp: boolean;
+  localPort: number;
+};
+
+/**
+ * Rents a GPU through the escrow contract.
+ *
+ * The shape is `rent`'s, with one difference that runs through everything: the
+ * money goes into a contract rather than to the provider, so stopping early
+ * gives the unused time back. That turns the exit path from a courtesy into the
+ * thing the renter actually cares about — hence the settle on ctrl-c, and the
+ * refund printed at the end.
+ *
+ * Order matters and is the inverse of `rent`. Here the renter deposits FIRST
+ * and the node verifies afterwards by reading the chain, because a contract
+ * call the renter signs and submits themselves is already final — there is no
+ * facilitator to co-sign it and no window in which it could expire.
+ */
+async function session(options: SessionOptions): Promise<void> {
+  const node = new NodeClient(options.node);
+  const specs = await node.specs();
+
+  if (options.gpu === true && !specs.gpu.available) {
+    throw new Error(
+      "you asked for a GPU, but this node is in CPU-fallback mode" +
+        `${specs.gpu.reason === undefined ? "" : ` (${specs.gpu.reason})`}.`,
+    );
+  }
+
+  const seconds = options.minutes * 60;
+  const identity = createLeaseIdentity();
+  const spec: SessionSpec = {
+    seconds,
+    public_key: identity.publicKey,
+    ...(options.gpu === true ? { require_gpu: true } : {}),
+  };
+
+  // Free: ask before paying. The quote is what the deposit has to match, and
+  // the node checks the chain against this same quote before provisioning.
+  const quote = await node.quoteSession(spec);
+  const pricePerSecond = BigInt(quote.price_tinybars_per_second);
+  const deposit = pricePerSecond * BigInt(seconds);
+
+  console.log(`node        ${specs.node_id}`);
+  console.log(`price       ${formatTinybars(pricePerSecond.toString())} per second`);
+  console.log(`first block ${options.minutes} min, ${formatTinybars(deposit.toString())} deposited`);
+  console.log(`escrow      ${quote.escrow_contract}`);
+  console.log(`session     ${quote.session_id}`);
+
+  if (options.budget !== undefined && deposit > BigInt(options.budget)) {
+    discardLeaseIdentity(identity);
+    throw new Error(
+      `the first deposit alone is ${formatTinybars(deposit.toString())}, over your ` +
+        `--budget of ${formatTinybars(String(options.budget))}. Nothing was spent.`,
+    );
+  }
+
+  const escrow = new EscrowClient(quote.escrow_contract, quote.network);
+  let deposited = 0n;
+  let settled = false;
+
+  /**
+   * Closes the session on-chain and reports the refund.
+   *
+   * Permissionless at the contract, so this always works — even if the node has
+   * vanished. Calling it early only ever refunds more, so there is never a
+   * reason to wait.
+   */
+  const settleNow = async (): Promise<void> => {
+    if (settled) return;
+    settled = true;
+    try {
+      const final = await escrow.quoteSettlement(quote.session_id);
+      const result = await escrow.settle(quote.session_id);
+      if (result.alreadySettled) {
+        console.log("\nsession already settled on-chain by the provider.");
+        return;
+      }
+      console.log(
+        `\nsettled: ${final.elapsed}s used, ` +
+          `${formatTinybars(final.providerAmount.toString())} to the provider, ` +
+          `${formatTinybars(final.refundAmount.toString())} refunded to you.`,
+      );
+      console.log(`hashscan    ${hashscanUrl(result.transaction, quote.network)}`);
+    } catch (error: unknown) {
+      // The money is still in the contract, which is the safe place for it to
+      // be. Say exactly how to get it, because nobody else will do it for them.
+      console.error(`\ncould not settle: ${String(error)}`);
+      console.error(
+        `your deposit is still in the escrow contract — retry with:\n` +
+          `  cleargate settle -n ${options.node} -s ${quote.session_id}`,
+      );
+    }
+  };
+
+  let created;
+  try {
+    const depositTx = await escrow.openSession({
+      sessionId: quote.session_id,
+      providerAddress: quote.provider_address,
+      pricePerSecond,
+      seconds,
+    });
+    deposited = deposit;
+    console.log(`deposit     ${depositTx}`);
+    console.log("provisioning container & quick tunnel (~15-25s) ...");
+
+    created = await node.claimSession(spec, quote.session_id, depositTx);
+  } catch (error: unknown) {
+    // Anything that fails after the deposit landed leaves money in the
+    // contract, so settle before giving up rather than leaving it stranded.
+    if (deposited > 0n) await settleNow();
+    discardLeaseIdentity(identity);
+    escrow.close();
+    throw error;
+  }
+
+  saveCertificate(identity, created.certificate);
+  console.log(`\nsession     ${created.session_id}`);
+  console.log(`status      ${created.status}`);
+  console.log(`expires     ${created.expires_at}`);
+
+  printConnectionDetails(
+    {
+      lease_id: created.lease_id,
+      status: created.status,
+      expires_at: created.expires_at,
+      certificate: created.certificate,
+      ssh_user: created.ssh_user,
+      ...(created.ssh_host === undefined ? {} : { ssh_host: created.ssh_host }),
+      ssh_principal: created.ssh_principal,
+      jupyter_url: created.jupyter_url,
+      jupyter_token: created.jupyter_token,
+      tunnel_mode: created.tunnel_mode,
+      transaction: created.deposit_transaction,
+      payer: "",
+      amount_tinybars: created.deposited_tinybars,
+      minutes: options.minutes,
+    },
+    identity,
+    options.localPort,
+  );
+
+  let released = false;
+  const release = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    try {
+      await node.stopSession(created.session_id, created.token ?? "");
+    } catch (error: unknown) {
+      console.error(`\ncould not stop the session cleanly: ${String(error)}`);
+    }
+    // Settle regardless of whether the node answered. The refund is the
+    // renter's money and does not depend on the provider cooperating.
+    await settleNow();
+    discardLeaseIdentity(identity);
+    escrow.close();
+  };
+
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      void release().then(() => process.exit(0));
+    });
+  }
+
+  if (!options.topUp) {
+    console.log("\n--no-top-up: this session lapses when the deposited time runs out.");
+    console.log(`then collect your refund with:  cleargate settle -n ${options.node} -s ${created.session_id}`);
+    // Close the Hedera client explicitly. Its gRPC connections keep Node's
+    // event loop alive, so simply returning here leaves the CLI hanging with a
+    // live session it is no longer managing — which then looks to the node like
+    // a renter who is still connected.
+    escrow.close();
+    return;
+  }
+
+  const topUpMinutes = options.topUpMinutes ?? options.minutes;
+  const topUpCost = pricePerSecond * BigInt(topUpMinutes * 60);
+  console.log(
+    `\nauto-topping up by ${topUpMinutes} min (${formatTinybars(topUpCost.toString())}) as time runs low.`,
+  );
+  console.log("ctrl-c to stop and get the unused time back.\n");
+
+  deposited = await holdSession({
+    node,
+    escrow,
+    sessionId: created.session_id,
+    token: created.token ?? "",
+    pricePerSecond,
+    topUpSeconds: topUpMinutes * 60,
+    budget: options.budget === undefined ? null : BigInt(options.budget),
+    deposited,
+  });
+
+  await release();
+}
+
+/**
+ * Keeps a session funded, buying more time before the deposited time runs out.
+ *
+ * The escrow twin of holdLease, and the budget works the same way: enforced
+ * here, on the renter's machine, against cumulative DEPOSITS rather than
+ * cumulative spend. That distinction is the point of escrow — a deposit is not
+ * yet a payment, and whatever is not used comes back at settle.
+ */
+async function holdSession(args: {
+  node: NodeClient;
+  escrow: EscrowClient;
+  sessionId: string;
+  token: string;
+  pricePerSecond: bigint;
+  topUpSeconds: number;
+  budget: bigint | null;
+  deposited: bigint;
+}): Promise<bigint> {
+  let deposited = args.deposited;
+  const topUpCost = args.pricePerSecond * BigInt(args.topUpSeconds);
+
+  for (;;) {
+    let state;
+    try {
+      state = await args.node.sessionState(args.sessionId, args.token);
+    } catch (error: unknown) {
+      // A node that has gone away does not strand the renter: their deposit is
+      // in the contract and settle is permissionless.
+      console.error(`\nlost contact with the node: ${String(error)}`);
+      return deposited;
+    }
+
+    if (isSessionTerminal(state.status)) {
+      console.log(`\nsession ${state.status}.`);
+      return deposited;
+    }
+
+    if (state.seconds_remaining > TOP_UP_THRESHOLD_SECONDS) {
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
+    if (args.budget !== null && deposited + topUpCost > args.budget) {
+      console.log(
+        `\nbudget reached: ${formatTinybars(deposited.toString())} deposited, and another ` +
+          `${formatTinybars(topUpCost.toString())} would pass your cap.`,
+      );
+      console.log("the session will lapse; whatever you did not use is refunded at settle.");
+      return deposited;
+    }
+
+    try {
+      await args.escrow.topUp({
+        sessionId: args.sessionId,
+        pricePerSecond: args.pricePerSecond,
+        seconds: args.topUpSeconds,
+      });
+      deposited += topUpCost;
+      // Tell the node to re-read the contract. Its own sweep would notice
+      // eventually, but a renter mid-run should not be frozen while it does.
+      const updated = await args.node.topUpSession(args.sessionId, args.token);
+      console.log(
+        `topped up to ${updated.expires_at} ` +
+          `(${formatTinybars(deposited.toString())} deposited so far)`,
+      );
+    } catch (error: unknown) {
+      console.error(`\ncould not top up: ${String(error)}`);
+      console.error("the session will lapse; unused time is still refunded at settle.");
+      return deposited;
+    }
+  }
+}
+
+/**
+ * Closes a session the renter left open.
+ *
+ * The recovery path for every way a `session` run can end badly — the process
+ * was killed, the node vanished mid-run, a claim failed after the deposit
+ * landed. `settle` is permissionless, so this works without the provider.
+ */
+async function settleSession(nodeUrl: string, sessionId: string): Promise<void> {
+  const specs = await new NodeClient(nodeUrl).specs();
+  const contract = specs.leases?.escrow_contract;
+  if (contract === undefined || contract === "") {
+    throw new Error(`node ${specs.node_id} does not sell escrow sessions, so it has no contract to settle against`);
+  }
+
+  const escrow = new EscrowClient(contract, specs.network);
+  try {
+    const quote = await escrow.quoteSettlement(sessionId);
+    const result = await escrow.settle(sessionId);
+    if (result.alreadySettled) {
+      console.log("already settled — nothing left to collect.");
+      return;
+    }
+    console.log(
+      `settled: ${quote.elapsed}s used, ` +
+        `${formatTinybars(quote.providerAmount.toString())} to the provider, ` +
+        `${formatTinybars(quote.refundAmount.toString())} refunded to you.`,
+    );
+    console.log(`hashscan    ${hashscanUrl(result.transaction, specs.network)}`);
+  } finally {
+    escrow.close();
+  }
+}
+
+/** How low the deposited time gets before another block is bought. */
+const TOP_UP_THRESHOLD_SECONDS = 60;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
