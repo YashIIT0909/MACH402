@@ -36,7 +36,7 @@ export type NodeSpec = {
    * sandboxed batch job and must never be switched on as a side effect.
    */
   leases?: LeaseOffer;
-};
+} & ProviderIdentity;
 
 export type GpuInfo = {
   /**
@@ -56,6 +56,31 @@ export type GpuInfo = {
  * It is the node's own `NodeSpec` plus the two things only the node knows:
  * where renters can reach it, and whether its operator has it paused.
  */
+/**
+ * This provider's ERC-8004 identity, if they registered one.
+ *
+ * Optional throughout, and that is not an oversight: registration costs a
+ * transaction and is explicitly opt-in, so a node without an agent id is a
+ * perfectly normal node — it is simply not discoverable by id.
+ */
+export type ProviderIdentity = {
+  /** The on-chain agent id. Absent, or 0, means unregistered. */
+  agent_id?: number;
+  /** The EVM address the identity is bound to on-chain. */
+  agent_address?: string;
+  /**
+   * The contract that issued the id. Published because an agent id without its
+   * registry resolves to nothing — the number alone says nothing about who
+   * minted it.
+   */
+  identity_registry?: string;
+  /**
+   * The HCS topic this node publishes settlements to, if any. A renter can read
+   * it before paying to see how the provider has actually behaved.
+   */
+  audit_topic?: string;
+};
+
 export type NodeHeartbeat = NodeSpec & {
   /** Absolute base URL renters use to reach this node, e.g. https://gpu.example. */
   public_url: string;

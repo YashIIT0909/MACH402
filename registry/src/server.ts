@@ -11,6 +11,7 @@ import type pg from "pg";
 
 import { cloudflareFromEnv, provisionTunnel } from "./cloudflare.js";
 import { ONLINE_WINDOW_SECONDS } from "./db.js";
+import { toProviderView } from "./providers.js";
 import { claimTunnel, getNode, listNodes, recordHeartbeat, recordTunnel, withdrawNode } from "./store.js";
 import { heartbeatSchema } from "./validate.js";
 
@@ -161,6 +162,29 @@ export function buildServer(pool: pg.Pool): FastifyInstance {
       return reply.code(404).send({ error: "no such node" });
     }
     return node;
+  });
+
+  // free: the agent-facing view of the same rows /v1/nodes serves.
+  //
+  // A second projection rather than a second store. /v1/nodes keeps its shape
+  // because the website and every deployed node already read it; this one uses
+  // the names an autonomous renter looks for and carries the ERC-8004 agent id.
+  app.get<{ Querystring: { online?: string } }>("/v1/providers", async (request) => {
+    const onlyOnline = request.query.online === "true";
+    const nodes = await listNodes(pool, onlyOnline);
+    return {
+      providers: nodes.map(toProviderView),
+      online_window_seconds: ONLINE_WINDOW_SECONDS,
+    };
+  });
+
+  // free
+  app.get<{ Params: { id: string } }>("/v1/providers/:id", async (request, reply) => {
+    const node = await getNode(pool, request.params.id);
+    if (node === null) {
+      return reply.code(404).send({ error: "no such provider" });
+    }
+    return toProviderView(node);
   });
 
   return app;

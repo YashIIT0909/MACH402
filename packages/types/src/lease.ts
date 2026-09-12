@@ -152,4 +152,24 @@ export type LeaseOffer = {
    * not the lease they wanted.
    */
   egress_allowlist: string[];
+
+  /**
+   * Present only when this node sells interactive time through the escrow
+   * contract rather than by forward payment.
+   *
+   * Its absence is meaningful, not just missing data: it tells a renter that
+   * this node's time is paid forward per slice and is NOT refundable if they
+   * stop early. A client should decide which flow to use from this field rather
+   * than from trying one and seeing what happens.
+   */
+  escrow_contract?: string;
+
+  /**
+   * The rate the escrow contract settles at, in tinybars per second.
+   *
+   * Present alongside escrow_contract. Per second rather than per minute
+   * because that is the granularity a refund is computed at — the whole reason
+   * a renter would choose this flow.
+   */
+  price_tinybars_per_second?: string;
 };

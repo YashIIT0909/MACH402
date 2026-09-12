@@ -80,7 +80,32 @@ export const heartbeatSchema = z.object({
       cpu_cores: z.number().int().positive().max(1024),
       workspace_gb: z.number().int().nonnegative().max(1_000_000),
       egress_allowlist: z.array(shortText).max(256),
+      escrow_contract: shortText.optional(),
+      price_tinybars_per_second: z
+        .string()
+        .regex(/^\d{1,20}$/, "price_tinybars_per_second must be a whole number of tinybars, as a string")
+        .optional(),
     })
+    .optional(),
+
+  /**
+   * This provider's ERC-8004 identity, if they registered one. All optional: a
+   * node that never registered is normal, not incomplete.
+   *
+   * agent_address is shape-checked for the same reason public_url is — the
+   * website renders it, and a node is not a trusted source of the strings it
+   * puts on our pages. The registry does not and cannot verify that the
+   * registration is real; that is what the contract is for.
+   */
+  agent_id: z.number().int().nonnegative().optional(),
+  agent_address: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "agent_address must be a 0x-prefixed EVM address")
+    .optional(),
+  identity_registry: shortText.optional(),
+  audit_topic: z
+    .string()
+    .regex(/^\d+\.\d+\.\d+$/, "audit_topic must be a Hedera topic id like 0.0.1234")
     .optional(),
 });
 

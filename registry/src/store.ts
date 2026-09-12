@@ -31,6 +31,10 @@ type NodeRow = {
   limits: JobLimits;
   image_allowlist: string[];
   leases: LeaseOffer | null;
+  agent_id: string | null;
+  agent_address: string | null;
+  identity_registry: string | null;
+  audit_topic: string | null;
   first_seen_at: Date;
   last_seen_at: Date;
   online: boolean;
@@ -76,8 +80,10 @@ export async function recordHeartbeat(
     `INSERT INTO nodes (
        node_id, token_sha256, public_url, agent_version, pay_to, price_tinybars,
        facilitator_url, network, asset, fee_payer, paused, gpu, limits, image_allowlist, leases,
+       agent_id, agent_address, identity_registry, audit_topic,
        first_seen_at, last_seen_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, now(), now())
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb,
+               $16, $17, $18, $19, now(), now())
      ON CONFLICT (node_id) DO UPDATE SET
        -- A node that is beating again has plainly come back.
        withdrawn       = false,
@@ -96,6 +102,13 @@ export async function recordHeartbeat(
        -- Nulls out on a node that turned leasing off, which is the point of
        -- replacing the row rather than merging into it.
        leases          = EXCLUDED.leases,
+       -- Replaced wholesale like the rest of the row, so a provider who
+       -- re-homes or rotates their key is reflected on the next beat rather
+       -- than leaving a stale identity behind.
+       agent_id          = EXCLUDED.agent_id,
+       agent_address     = EXCLUDED.agent_address,
+       identity_registry = EXCLUDED.identity_registry,
+       audit_topic       = EXCLUDED.audit_topic,
        last_seen_at    = now()`,
     [
       beat.node_id,
@@ -113,6 +126,12 @@ export async function recordHeartbeat(
       JSON.stringify(beat.limits),
       JSON.stringify(beat.image_allowlist),
       beat.leases === undefined ? null : JSON.stringify(beat.leases),
+      // 0 is the contract's "unregistered" sentinel, so it is stored as NULL
+      // rather than as an agent id nobody holds.
+      beat.agent_id === undefined || beat.agent_id === 0 ? null : beat.agent_id,
+      beat.agent_address ?? null,
+      beat.identity_registry ?? null,
+      beat.audit_topic ?? null,
     ],
   );
 
@@ -129,6 +148,7 @@ const IS_ONLINE = `(NOT withdrawn AND last_seen_at > now() - make_interval(secs 
 const SELECT_NODE = `
   SELECT node_id, public_url, agent_version, pay_to, price_tinybars, facilitator_url,
          network, asset, fee_payer, paused, gpu, limits, image_allowlist, leases,
+         agent_id, agent_address, identity_registry, audit_topic,
          first_seen_at, last_seen_at,
          ${IS_ONLINE} AS online
   FROM nodes
@@ -281,6 +301,13 @@ function toListing(row: NodeRow): NodeListing {
     limits: row.limits,
     image_allowlist: row.image_allowlist,
     ...(row.leases === null ? {} : { leases: row.leases }),
+    // pg returns BIGINT as a string, because a 64-bit integer does not survive
+    // a JavaScript number. Agent ids are small enough to convert safely, and
+    // the shared type says number.
+    ...(row.agent_id === null ? {} : { agent_id: Number(row.agent_id) }),
+    ...(row.agent_address === null ? {} : { agent_address: row.agent_address }),
+    ...(row.identity_registry === null ? {} : { identity_registry: row.identity_registry }),
+    ...(row.audit_topic === null ? {} : { audit_topic: row.audit_topic }),
     online: row.online,
     first_seen_at: row.first_seen_at.toISOString(),
     last_seen_at: row.last_seen_at.toISOString(),

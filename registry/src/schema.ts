@@ -50,6 +50,18 @@ ALTER TABLE nodes ADD COLUMN IF NOT EXISTS withdrawn BOOLEAN NOT NULL DEFAULT FA
 -- of the row.
 ALTER TABLE nodes ADD COLUMN IF NOT EXISTS leases JSONB;
 
+-- This provider's ERC-8004 identity, once they have run cleargate-node
+-- register. Nullable, and it must stay that way: registration is opt-in and
+-- costs a transaction, so a node without one is normal rather than incomplete.
+--
+-- The registry does not issue, verify or own these. It records what a node
+-- claims and publishes it; the contract is what makes the claim meaningful,
+-- because registration there is bound to msg.sender and we are not it.
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS agent_id      BIGINT;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS agent_address TEXT;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS identity_registry TEXT;
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS audit_topic   TEXT;
+
 -- Which Cloudflare tunnel belongs to which node.
 --
 -- Separate from the nodes table on purpose. A node asks for a tunnel before it
