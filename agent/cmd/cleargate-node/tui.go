@@ -13,12 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/tui"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
 )
 
 func newTUICommand() *cobra.Command {
@@ -48,28 +44,20 @@ func runTUI(parent context.Context, configPath string) error {
 
 	log := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
-
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	fac := x402.NewFacilitator(cfg.FacilitatorURL, 30*time.Second)
-	if _, err := fac.Kind(ctx, x402.SchemeExact, cfg.Network); err != nil {
-		return fmt.Errorf("facilitator is not usable, so this node cannot be paid: %w", err)
-	}
-
-	run, err := runner.New(ctx, cfg, log)
+	// The same assembly `serve` uses, deliberately — including the leasing
+	// wiring and the lease sweep. Building a second one here by hand is what
+	// previously left the dashboard serving a node that answered 404 on
+	// /v1/leases however the provider had configured it. See node.go.
+	n, err := buildNode(ctx, configPath, log)
 	if err != nil {
 		return err
 	}
+	defer n.stop()
 
-	server := httpapi.New(cfg, run, fac, log, version)
-
-	stopAnnouncing := announce(ctx, cfg, server, log)
-	defer stopAnnouncing()
+	cfg, run, server := n.cfg, n.runner, n.server
 
 	// Seed the dashboard from the receipt log so a restart does not appear to
 	// reset the provider's earnings.

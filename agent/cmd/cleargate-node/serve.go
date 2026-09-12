@@ -6,17 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
 	"github.com/YashIIT0909/ClearGate/agent/internal/registry"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
 	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
 )
 
 func newServeCommand() *cobra.Command {
@@ -34,85 +31,16 @@ func newServeCommand() *cobra.Command {
 func serve(parent context.Context, configPath string) error {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
-
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fac := x402.NewFacilitator(cfg.FacilitatorURL, 30*time.Second)
-
-	// Fail fast if the facilitator cannot price a job: a node that cannot build
-	// a challenge cannot be paid, and it is better to know at startup.
-	kind, err := fac.Kind(ctx, x402.SchemeExact, cfg.Network)
+	n, err := buildNode(ctx, configPath, log)
 	if err != nil {
 		return err
 	}
-	feePayer, _ := kind.FeePayer()
-	log.Info("facilitator ready", "url", cfg.FacilitatorURL, "network", cfg.Network, "fee_payer", feePayer)
+	defer n.stop()
 
-	// Leasing is set up before the runner and the server so that a tunnel that
-	// supplies this node's public URL has done so before anything reads it.
-	leasing, err := startLeasing(ctx, &cfg, configPath, log)
-	if err != nil {
-		// Not fatal: a node whose tunnel will not come up should still sell
-		// batch jobs, which is the mode that needs no inbound reachability at
-		// all. It just does not sell leases (CLAUDE.md invariant 8).
-		log.Error("leasing is configured but could not be started; this node will sell jobs only", "error", err)
-		leasing = nil
-	}
-	if leasing != nil {
-		defer leasing.tunnel.Stop()
-	}
-
-	run, err := runner.New(ctx, cfg, log)
-	if err != nil {
-		return err
-	}
-
-	log.Info("node ready",
-		"node_id", cfg.NodeID,
-		"pay_to", cfg.PayTo,
-		"price_tinybars", cfg.PriceTinybars,
-		"gpu", run.GPU().Available,
-		"leases", leasing != nil,
-	)
-
-	server := httpapi.New(cfg, run, fac, log, version)
-
-	// The signing sidecar and everything built on it. Failures here are logged
-	// and survived rather than fatal, for the same reason a tunnel failure is:
-	// a node that cannot publish its audit trail should still sell compute.
-	if err := enableHedera(ctx, cfg, server, log); err != nil {
-		log.Error("Hedera features are configured but could not be started", "error", err)
-	}
-
-	if leasing != nil {
-		server.EnableLeases(leasing.ca, leasing.tunnel)
-
-		// The loop that freezes a lease whose paid time lapsed and reclaims the
-		// machine once its grace period is gone.
-		reaped := make(chan struct{})
-		go func() {
-			defer close(reaped)
-			server.ReapLeases(ctx)
-		}()
-		defer func() { <-reaped }()
-	}
-
-	stopAnnouncing := announce(ctx, cfg, server, log)
-	defer stopAnnouncing()
-
-	return server.Listen(ctx)
-}
-
-// leasing is the pair of things a node needs before it can sell interactive
-// access: its own certificate authority, and a way in through NAT.
-type leasing struct {
-	ca     *sshca.CA
-	tunnel *tunnel.Manager
+	return n.server.Listen(ctx)
 }
 
 // startLeasing prepares the CA and the tunnel, and — in named mode — makes sure
