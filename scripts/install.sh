@@ -11,14 +11,29 @@
 #   REGISTRY_URL=http://localhost:4400 \
 #   GPU=1 \
 #   LEASES=1 \
+#   SESSIONS=1 \
+#   SELF_SETTLE=1 \
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/YashIIT0909/ClearGate/main/scripts/install.sh)"
 #
 # It also works run in place as ./scripts/install.sh from an existing
 # checkout (what a developer does), in which case it reuses that checkout
 # instead of cloning one.
 #
-# No Hedera private key is involved, here or anywhere else on the provider
-# side: the node receives payment, it never signs (CLAUDE.md invariant 1).
+# With SESSIONS=1 (or HCS=1 alone), the operator key this script generates may
+# come back unfunded on a first run — that is a Hedera account that does not
+# exist until someone sends it HBAR, not a failure. `cleargate-node setup`
+# prints the address and waits for funding on its own, so the whole install
+# — build, configure, fund, start — happens in one sitting rather than two
+# invocations of this script. See --self-settle in CLAUDE.md's session
+# lifecycle section for what SELF_SETTLE actually changes about the operator
+# key's role.
+#
+# No Hedera private key is involved on the earnings side, here or anywhere
+# else on the provider side: the node receives payment into PAY_TO, and PAY_TO
+# never signs (CLAUDE.md invariant 1). HCS=1 and SESSIONS=1 add a *separate*,
+# node-local operator key that pays its own gas and — only with
+# SELF_SETTLE=1 — pays session refunds; it never touches PAY_TO or its
+# earnings.
 set -euo pipefail
 
 PAY_TO="${PAY_TO:-}"
@@ -43,16 +58,46 @@ TUNNEL_MODE="${TUNNEL_MODE:-quick}"
 # CUDA base, or a renter's torch will not see the GPU they paid for.
 LEASE_BASE_IMAGE="${LEASE_BASE_IMAGE:-}"
 
+# The audit trail: every settlement, and — with SESSIONS=1 — the running
+# refund-owed figure a metered session publishes every 15 seconds, on a Hedera
+# Consensus Service topic this provider owns. Off by default because it is the
+# first thing that puts key material on this machine (CLAUDE.md's "the agent
+# never holds a private key" is about the merchant side; this is the sidecar's
+# own node-local operator key, described in the README's HCS section).
+HCS="${HCS:-0}"
+
+# Metered, refundable interactive time instead of forward-paid leases. Implies
+# HCS=1 whether or not it was set: the published burn trail is what makes
+# prepaying a stranger checkable at all, not an optional extra on top of it.
+SESSIONS="${SESSIONS:-0}"
+
+# Whether this node pays a session's unburned credit back automatically, from
+# its own operator account, instead of leaving that for the provider to do by
+# hand. Real money moves through the operator key with this on — see the note
+# printed after setup.
+SELF_SETTLE="${SELF_SETTLE:-0}"
+
 CONFIG="${CONFIG:-config.yaml}"
 CLEARGATE_REPO="${CLEARGATE_REPO:-https://github.com/YashIIT0909/ClearGate.git}"
 CLEARGATE_DIR="${CLEARGATE_DIR:-$HOME/.cleargate/ClearGate}"
 
-leases_on() { [[ "$LEASES" == "1" || "$LEASES" == "true" ]]; }
-gpu_on()    { [[ "$GPU" == "1" || "$GPU" == "true" ]]; }
+leases_on()      { [[ "$LEASES" == "1" || "$LEASES" == "true" ]]; }
+gpu_on()         { [[ "$GPU" == "1" || "$GPU" == "true" ]]; }
+sessions_on()    { [[ "$SESSIONS" == "1" || "$SESSIONS" == "true" ]]; }
+hcs_on()         { [[ "$HCS" == "1" || "$HCS" == "true" ]] || sessions_on; }
+self_settle_on() { [[ "$SELF_SETTLE" == "1" || "$SELF_SETTLE" == "true" ]]; }
 
 if [[ -z "$PAY_TO" ]]; then
   echo "PAY_TO is required — the Hedera testnet account your earnings are paid into." >&2
   echo "Get one at https://portal.hedera.com, then re-run with PAY_TO=0.0.1234" >&2
+  exit 1
+fi
+
+# Sessions are a way of paying for leases, not a feature on their own — the
+# same rule `cleargate-node setup` enforces, checked here too so this fails in
+# a second rather than after building lease images that will not be used.
+if sessions_on && ! leases_on; then
+  echo "SESSIONS=1 only applies to interactive time; re-run with LEASES=1 as well." >&2
   exit 1
 fi
 
@@ -62,6 +107,17 @@ for tool in git go docker; do
     exit 1
   fi
 done
+
+# The Hedera sidecar (`cleargate-hedera`) is a TS workspace package, not part
+# of the Go binary `make agent` builds — HCS and metered sessions need pnpm to
+# get it onto this machine at all.
+if hcs_on; then
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "pnpm is required when HCS=1 or SESSIONS=1 — it builds the Hedera signing sidecar." >&2
+    echo "Install it (https://pnpm.io/installation) and re-run." >&2
+    exit 1
+  fi
+fi
 
 # ssh-keygen becomes a hard runtime dependency the moment leasing is on: it is
 # what generates this node's certificate authority and signs each renter's
@@ -157,6 +213,24 @@ cd "$repo_root"
 echo "==> building cleargate-node"
 make agent
 
+# The sidecar (`cleargate-hedera`) lives in the TS workspace, not the Go
+# module `make agent` just built. `make install` (a `pnpm install` at the repo
+# root) puts it at node_modules/.bin/cleargate-hedera. That absolute path, not
+# a bare command name, is what gets handed to `setup` below — a bare name
+# would be resolved off whatever PATH happens to be in scope, which works in
+# the terminal running this script and silently stops working the next time
+# the node is started from a fresh shell, cron, or a systemd unit.
+hedera_sidecar=""
+if hcs_on; then
+  echo "==> installing the Hedera signing sidecar"
+  make install
+  hedera_sidecar="$repo_root/node_modules/.bin/cleargate-hedera"
+  if [[ ! -x "$hedera_sidecar" ]]; then
+    echo "expected the sidecar at $hedera_sidecar after \`make install\` but did not find it" >&2
+    exit 1
+  fi
+fi
+
 # A lease settles only once its container is up and reachable, so there is no
 # staging phase to hide an image pull in — the image has to be on the box
 # before the first renter arrives. Built locally rather than pulled from a
@@ -203,8 +277,38 @@ if leases_on; then
   )
 fi
 
+if hcs_on; then
+  setup_args+=(--enable-hcs --hedera-sidecar "$hedera_sidecar")
+fi
+if sessions_on; then
+  setup_args+=(--enable-sessions)
+fi
+if self_settle_on; then
+  setup_args+=(--self-settle)
+fi
+
 echo "==> configuring"
+# If this node's operator key has no HBAR yet, setup prints the address and
+# waits for it to be funded rather than exiting — so if HCS or SESSIONS is on
+# and the key was just generated, this is the point at which the script pauses
+# for you to send a few testnet HBAR from https://portal.hedera.com. It
+# continues on its own the moment that lands; ctrl-c aborts and re-running the
+# whole script picks up from a config that already has everything but Hedera.
 ./bin/cleargate-node setup "${setup_args[@]}"
+
+# setup exits 0 without writing $CONFIG when Hedera features were requested
+# and the operator key never got funded within its wait window — that is a
+# provider choosing not to fund it yet, not a script failure, so it is not
+# treated as one. But starting the dashboard against a config that does not
+# exist would be a confusing way to find that out.
+if [[ ! -f "$CONFIG" ]]; then
+  echo
+  echo "==> not started: $CONFIG was not written."
+  echo "    This means the operator key is still unfunded. Send it a few testnet HBAR"
+  echo "    (https://portal.hedera.com), then re-run this exact command — everything"
+  echo "    already built (the binary, the lease images) will not be rebuilt."
+  exit 0
+fi
 
 if leases_on; then
   cat <<'NOTE'
@@ -223,6 +327,33 @@ to an unprivileged user on your host:
   https://docs.docker.com/engine/security/userns-remap/
 
 NOTE
+fi
+
+if sessions_on; then
+  if self_settle_on; then
+    cat <<'NOTE'
+
+==> a note on metered sessions
+
+A renter's unburned credit is refunded from this node's own operator account
+(SELF_SETTLE=1) — that account now needs to hold more than a fee float, and
+`setup` just checked whether it does. Earnings are untouched: they still land
+in PAY_TO, which signs nothing, so a compromise of the operator key can only
+ever cost what is sitting in it for refunds — never your earnings.
+
+NOTE
+  else
+    cat <<'NOTE'
+
+==> a note on metered sessions
+
+This node meters sessions and publishes what it owes to its own HCS topic, but
+SELF_SETTLE is off — refunds are not paid automatically. When a session ends
+owing a renter money, the node logs it and the amount stays on the audit
+topic; pay it by hand, or re-run this script with SELF_SETTLE=1.
+
+NOTE
+  fi
 fi
 
 echo
