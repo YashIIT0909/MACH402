@@ -3,6 +3,8 @@ package runner
 import (
 	"math/big"
 	"time"
+
+	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 )
 
 func secondsDuration(seconds int64) time.Duration {
@@ -46,3 +48,24 @@ func NewForTest() *Runner {
 	return &Runner{events: newEventBroker(), leases: map[string]*Lease{}}
 }
 
+// ConfigureForTest gives a test runner the configuration and detected hardware
+// it would have had from New, without going near Docker or nvidia-smi.
+//
+// The provider's dashboard asks a runner what it is selling — leases enabled,
+// a GPU a lease container can actually compute on — so rendering it in a test
+// needs those answers to be settable. Still nothing runnable: there is no
+// Docker client here, so this cannot start anything.
+func ConfigureForTest(r *Runner, cfg config.Config, gpu GPU, leaseImageCUDA bool) {
+	r.cfg = cfg
+	r.gpu = gpu
+	r.leaseImageCUDA = leaseImageCUDA
+}
+
+// AdoptLeaseForTest installs a lease as this runner's active one, so a test can
+// render or sweep a node that has a renter on it.
+func AdoptLeaseForTest(r *Runner, lease *Lease) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.leases[lease.ID] = lease
+	r.activeLease = lease.ID
+}

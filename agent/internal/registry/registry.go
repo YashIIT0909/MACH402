@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
@@ -29,6 +30,41 @@ const Interval = 30 * time.Second
 // HeartbeatFunc returns the node's current self-description.
 type HeartbeatFunc func(context.Context) nodespec.Heartbeat
 
+// Status is what the provider's dashboard shows about this node's listing.
+//
+// Every failure in this package is logged and shrugged off, which is right —
+// but silently. A provider who typed a registry URL with a typo in it has a
+// node that sells perfectly well and appears nowhere, and the only evidence is
+// a warning in a log file the dashboard is not showing them. So the announcer
+// keeps the outcome of its last beat where a caller can read it.
+type Status struct {
+	// Configured is false when no registry_url is set. That is a supported
+	// choice, not a fault: renters who know the node's URL still pay it.
+	Configured bool
+
+	// URL is the registry being announced to, if any.
+	URL string
+
+	// LastAttempt and LastSuccess are zero until the first beat of each kind.
+	// A LastSuccess well behind LastAttempt is a listing going stale.
+	LastAttempt time.Time
+	LastSuccess time.Time
+
+	// Err is why the most recent beat failed, or empty if it did not.
+	Err string
+
+	// Withdrawn is set once the node has told the registry it is stopping.
+	Withdrawn bool
+}
+
+// Listed reports whether the registry has heard from this node recently enough
+// that the website is still offering it. The registry's own rule is 90 seconds
+// since the last beat; this mirrors it rather than inventing a second one.
+func (s Status) Listed() bool {
+	return s.Configured && !s.Withdrawn && !s.LastSuccess.IsZero() &&
+		time.Since(s.LastSuccess) < 90*time.Second
+}
+
 // Announcer pushes heartbeats to the registry on a timer.
 type Announcer struct {
 	baseURL   string
@@ -37,6 +73,9 @@ type Announcer struct {
 	heartbeat HeartbeatFunc
 	http      *http.Client
 	log       *slog.Logger
+
+	mu     sync.Mutex
+	status Status
 }
 
 // New returns an announcer for the registry at baseURL.
@@ -48,7 +87,17 @@ func New(baseURL, nodeID, token string, heartbeat HeartbeatFunc, log *slog.Logge
 		heartbeat: heartbeat,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		log:       log,
+		status:    Status{Configured: baseURL != "", URL: strings.TrimRight(baseURL, "/")},
 	}
+}
+
+// Status snapshots the outcome of the most recent beat. Safe from any
+// goroutine, which it has to be: the dashboard reads it on every redraw while
+// Run is writing it on its own timer.
+func (a *Announcer) Status() Status {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status
 }
 
 // Run announces immediately, then every Interval until ctx is cancelled.
@@ -85,7 +134,13 @@ func (a *Announcer) withdraw() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := a.post(ctx, "/v1/nodes/"+a.nodeID+"/offline", nil); err != nil {
+	err := a.post(ctx, "/v1/nodes/"+a.nodeID+"/offline", nil)
+
+	a.mu.Lock()
+	a.status.Withdrawn = true
+	a.mu.Unlock()
+
+	if err != nil {
 		a.log.Warn("could not tell the registry this node is stopping; the listing will time out on its own",
 			"registry", a.baseURL, "error", err)
 		return
@@ -94,7 +149,19 @@ func (a *Announcer) withdraw() {
 }
 
 func (a *Announcer) beat(ctx context.Context) {
-	if err := a.post(ctx, "/v1/nodes/heartbeat", a.heartbeat(ctx)); err != nil {
+	err := a.post(ctx, "/v1/nodes/heartbeat", a.heartbeat(ctx))
+
+	a.mu.Lock()
+	a.status.LastAttempt = time.Now()
+	if err == nil {
+		a.status.LastSuccess = a.status.LastAttempt
+		a.status.Err = ""
+	} else {
+		a.status.Err = err.Error()
+	}
+	a.mu.Unlock()
+
+	if err != nil {
 		a.log.Warn("registry heartbeat failed; the node still sells jobs normally",
 			"registry", a.baseURL, "error", err)
 		return

@@ -131,6 +131,53 @@ func (s *Server) EnableLeases(ca *sshca.CA, tunnels *tunnel.Manager) {
 	s.tunnel = tunnels
 }
 
+// Reach reports where renters currently reach this node's leases, and whether
+// this node sells leases at all.
+//
+// For the provider's dashboard: the difference between a named tunnel and a
+// quick one is the difference between selling SSH and not, and it is not
+// something a provider should have to infer from a config file they wrote once.
+func (s *Server) Reach() (tunnel.Endpoints, bool) {
+	if s.tunnel == nil {
+		return tunnel.Endpoints{}, false
+	}
+	return s.tunnel.Endpoints(), true
+}
+
+// EndLease evicts whatever lease is running right now, from the provider's
+// side, and returns the id it ended.
+//
+// A provider watching a stranger's shell on their own machine needs a way to
+// end it that is not "kill the daemon", and this is it: the machine is wanted
+// back, or the renter is doing something the provider will not host.
+//
+// It is deliberately the same sequence the reap branch of sweepLeases runs,
+// including settling with the lease it already holds rather than looking it up
+// again — StopLease releases the node's single lease slot, so a re-lookup finds
+// nothing and refunds nobody. A metered session evicted here is charged for the
+// seconds it actually used and refunded the rest, exactly as if the renter had
+// stopped it themselves; a direct-paid lease forfeits its slice, which is the
+// same trade stopping one has always made.
+func (s *Server) EndLease(ctx context.Context, status runner.LeaseStatus) (string, bool) {
+	lease, ok := s.runner.ActiveLease()
+	if !ok || lease.Status().IsTerminal() {
+		return "", false
+	}
+
+	// Charge up to this instant before anything is torn down, so the refund is
+	// measured against the meter that has been publishing all along.
+	if lease.SessionID() != "" && lease.Status() == runner.LeaseActive {
+		lease.Burn(time.Now())
+	}
+
+	s.runner.StopLease(ctx, lease, status)
+	if s.tunnel != nil {
+		s.tunnel.Clear(ctx)
+	}
+	s.settleSession(ctx, lease)
+	return lease.ID, true
+}
+
 // ReapLeases runs the background loop that freezes and then reclaims leases
 // whose paid time has run out. It returns when ctx is cancelled.
 func (s *Server) ReapLeases(ctx context.Context) {

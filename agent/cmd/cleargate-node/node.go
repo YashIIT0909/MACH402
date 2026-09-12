@@ -8,6 +8,7 @@ import (
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
+	"github.com/YashIIT0909/ClearGate/agent/internal/registry"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
 	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
@@ -33,6 +34,10 @@ type node struct {
 	runner  *runner.Runner
 	server  *httpapi.Server
 	leasing *leasing
+
+	// registryStatus reports how this node's listing is going. Always non-nil;
+	// on an unlisted node it reports exactly that.
+	registryStatus func() registry.Status
 
 	// stop unwinds the background work this node started. Safe to call at any
 	// point, including on a startup failure: it cancels the node's own context
@@ -121,13 +126,14 @@ func buildNode(ctx context.Context, configPath string, log *slog.Logger) (*node,
 		close(reaped)
 	}
 
-	stopAnnouncing := announce(ctx, cfg, server, log)
+	stopAnnouncing, registryStatus := announce(ctx, cfg, server, log)
 
 	return &node{
-		cfg:     cfg,
-		runner:  run,
-		server:  server,
-		leasing: leases,
+		cfg:            cfg,
+		runner:         run,
+		server:         server,
+		leasing:        leases,
+		registryStatus: registryStatus,
 		stop: func() {
 			stopAnnouncing()
 			cancelNode()

@@ -180,8 +180,21 @@ make node-register      # register this node's ERC-8004 provider identity
 ```
 
 The dashboard (`cleargate-node tui`) is a **view** over the same runner and server `serve` uses. It
-owns no state of its own, so a provider never has to wonder whether it and the daemon disagree.
-Because it owns the terminal, the daemon's logs go to `cleargate-node.log` instead of stdout.
+owns no state of its own, so a provider never has to wonder whether it and the daemon disagree — the
+one exception is a ledger seeded from `receipts.jsonl` at startup, which is not a second opinion but
+the same authoritative file `cleargate-node earnings` reads, so a restart does not appear to zero a
+provider's earnings. Because it owns the terminal, the daemon's logs go to `cleargate-node.log`
+instead of stdout.
+
+It is five screens rather than one stack: **Overview** (earnings by window, GPU load, what the node
+sells, and whether anyone can find it), **Jobs** (table, detail and a live log pane), **Leasing**
+(the session running now, its credit and what is owed back, how the renter is connected, terms,
+history), **Activity** (the whole event feed, filterable and scrollable) and **Node** (the
+configuration and trust posture actually in force). Two things it can do that no other local surface
+can: report that the registry is refusing this node's heartbeats — the daemon logs that at warn level
+and keeps selling, which is correct and silent — and evict the lease running right now, via
+`Server.EndLease`, which reuses the sweep's reap-and-settle order so a metered session is charged for
+the seconds it used and refunded the rest. `x` and `e` both ask a second time before acting.
 
 ## The job lifecycle
 
