@@ -15,7 +15,8 @@
     "tsx": "4.23.13",
     "@types/node": "22.20.2",
     "@cleargate/client": "workspace:*",
-    "@cleargate/hederakit": "workspace:*"
+    "@cleargate/hederakit": "workspace:*",
+    "@cleargate/mcp-server": "workspace:*"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
