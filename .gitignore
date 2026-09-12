@@ -6,6 +6,8 @@ dist/
 .env
 .env.*
 !.env.example
+# The website's example is documentation too — it names variables, never values.
+!.env.local.example
 
 # go build output — anchored, so client/bin/ (the cleargate launcher) is kept
 /bin/

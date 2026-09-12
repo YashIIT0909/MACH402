@@ -12,18 +12,25 @@ import { Input } from "@/components/ui/input";
 const INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/YashIIT0909/ClearGate/main/scripts/install.sh";
 
+type Target = "remote" | "local";
+type TunnelMode = "quick" | "off";
+
 /**
- * Builds the provider's install command.
+ * Builds the provider's setup command.
  *
  * Nothing is submitted anywhere: the registry learns about a node when that
  * node first heartbeats, not when someone fills in this form. So there is no
  * account to create, and no way to list a machine you do not control.
  *
- * The command is self-contained — curl fetches the installer, and the
- * installer clones ClearGate if there is no checkout already at
- * $CLEARGATE_DIR. A provider does not need to git-clone this repo by hand.
+ * Two targets, because they are genuinely different situations rather than a
+ * preference. A provider putting a spare box to work wants the one-liner, which
+ * clones and builds for them. Someone testing both sides on one laptop already
+ * has the checkout, and running the installer there would clone a second copy
+ * into ~/.cleargate and configure that one instead — which is a confusing way
+ * to discover your edits are not running.
  */
 export function InstallCommand({ registryUrl }: { registryUrl: string }) {
+  const [target, setTarget] = useState<Target>("remote");
   const [payTo, setPayTo] = useState("");
   const [price, setPrice] = useState("100000");
   const [publicUrl, setPublicUrl] = useState("http://localhost:8402");
@@ -33,19 +40,52 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
   // must never ride along with the GPU box being ticked.
   const [leases, setLeases] = useState(false);
   const [leasePrice, setLeasePrice] = useState("200000");
+  const [tunnelMode, setTunnelMode] = useState<TunnelMode>("quick");
   const [copied, setCopied] = useState(false);
 
-  const command = [
-    `PAY_TO=${payTo === "" ? "0.0.YOUR_ACCOUNT" : payTo}`,
-    `PRICE_TINYBARS=${price === "" ? "100000" : price}`,
-    `PUBLIC_URL=${publicUrl}`,
-    `REGISTRY_URL=${registryUrl}`,
-    ...(gpu ? ["GPU=1"] : []),
-    ...(leases
-      ? ["LEASES=1", `LEASE_PRICE_TINYBARS_PER_MINUTE=${leasePrice === "" ? "200000" : leasePrice}`]
-      : []),
-    `bash -c "$(curl -fsSL ${INSTALL_SCRIPT_URL})"`,
-  ].join(" \\\n  ");
+  const account = payTo === "" ? "0.0.YOUR_ACCOUNT" : payTo;
+  const jobPrice = price === "" ? "100000" : price;
+  const minutePrice = leasePrice === "" ? "200000" : leasePrice;
+
+  const command =
+    target === "remote"
+      ? [
+          `PAY_TO=${account}`,
+          `PRICE_TINYBARS=${jobPrice}`,
+          `PUBLIC_URL=${publicUrl}`,
+          `REGISTRY_URL=${registryUrl}`,
+          ...(gpu ? ["GPU=1"] : []),
+          ...(leases
+            ? [
+                "LEASES=1",
+                `LEASE_PRICE_TINYBARS_PER_MINUTE=${minutePrice}`,
+                `TUNNEL_MODE=${tunnelMode}`,
+              ]
+            : []),
+          `bash -c "$(curl -fsSL ${INSTALL_SCRIPT_URL})"`,
+        ].join(" \\\n  ")
+      : [
+          "make agent",
+          ...(leases ? ["make lease-image"] : []),
+          "",
+          [
+            "./bin/cleargate-node setup",
+            `  --pay-to ${account}`,
+            `  --price-tinybars ${jobPrice}`,
+            `  --public-url ${publicUrl}`,
+            `  --registry-url ${registryUrl}`,
+            ...(gpu ? ["  --gpu"] : []),
+            ...(leases
+              ? [
+                  "  --enable-leases",
+                  `  --lease-price-tinybars-per-minute ${minutePrice}`,
+                  `  --tunnel-mode ${tunnelMode}`,
+                ]
+              : []),
+          ].join(" \\\n"),
+          "",
+          "make dev-tui",
+        ].join("\n");
 
   async function copy() {
     await navigator.clipboard.writeText(command);
@@ -56,9 +96,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
   return (
     <div className="grid gap-px bg-foreground/10 lg:grid-cols-2">
       <div className="bg-background p-8 lg:p-12">
-        <span className="mb-8 block type-label text-muted-foreground">
-          Your details
-        </span>
+        <span className="mb-8 block type-label text-muted-foreground">Your details</span>
 
         <Field label="Hedera account to be paid into" hint="An account id, never a key.">
           <Input
@@ -77,7 +115,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
 
         <Field
           label="Public URL renters reach you on"
-          hint="This is what the registry hands out. It has to be reachable from outside your machine."
+          hint="This is what the registry hands out. It has to be reachable from outside your machine — unless you are testing both sides on this one, where localhost is right."
         >
           <Input value={publicUrl} onChange={(event) => setPublicUrl(event.target.value)} />
         </Field>
@@ -112,7 +150,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
           <div className="mt-4 border border-accent/30 bg-accent/[0.04] p-4">
             <p className="mb-4 text-sm text-muted-foreground">
               Renters get a root shell in a container on this machine and connect over SSH or from
-              Colab. Their code and data never leave their own machine, and nothing of yours is
+              a browser. Their code and data never leave their own machine, and nothing of yours is
               exposed: every Linux capability is dropped but the few <Code>sshd</Code> needs, it
               cannot gain privileges, it gets a throwaway filesystem, and it reaches the network
               only through a proxy that allows package and model registries and refuses the rest.
@@ -123,28 +161,64 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
               Docker&apos;s user-namespace remapping, which maps that root to an unprivileged user
               on your host — turn it on before renting to strangers.
             </p>
+
             <Field
               label="Price per minute of interactive time, in tinybars"
               hint="200000 = 0.002 HBAR a minute. A whole number, as ever."
             >
-              <Input
-                value={leasePrice}
-                onChange={(event) => setLeasePrice(event.target.value)}
-              />
+              <Input value={leasePrice} onChange={(event) => setLeasePrice(event.target.value)} />
             </Field>
+
+            <span className="mb-2 block type-label text-muted-foreground">
+              How renters reach the session
+            </span>
+            <div className="mb-2 grid gap-2 sm:grid-cols-2">
+              <ModeButton
+                active={tunnelMode === "quick"}
+                onClick={() => setTunnelMode("quick")}
+                title="Cloudflare quick tunnel"
+                body="No Cloudflare account. A fresh random hostname per session, so the link dies with it. Jupyter only — a quick tunnel carries no SSH."
+              />
+              <ModeButton
+                active={tunnelMode === "off"}
+                onClick={() => setTunnelMode("off")}
+                title="No tunnel"
+                body="The session is only reachable from this machine's own network. Right for testing both sides on one box; useless to a renter anywhere else."
+              />
+            </div>
+            {tunnelMode === "quick" ? (
+              <p className="text-sm text-muted-foreground">
+                Needs <Code>cloudflared</Code> installed. Without it the node cannot publish a
+                session and will refuse to sell one rather than take payment for something
+                unreachable.
+              </p>
+            ) : null}
           </div>
         ) : null}
       </div>
 
       <div className="bg-background p-8 lg:p-12">
-        <span className="mb-8 block type-label text-muted-foreground">
-          Run this in your terminal
-        </span>
+        <span className="mb-6 block type-label text-muted-foreground">Where are you running it</span>
+
+        <div className="mb-8 grid gap-2 sm:grid-cols-2">
+          <ModeButton
+            active={target === "remote"}
+            onClick={() => setTarget("remote")}
+            title="On another machine"
+            body="One command. It clones ClearGate, builds the node, checks Docker and the GPU, and starts it."
+          />
+          <ModeButton
+            active={target === "local"}
+            onClick={() => setTarget("local")}
+            title="From this checkout"
+            body="You already have the repo. Uses it directly instead of cloning a second copy into ~/.cleargate."
+          />
+        </div>
 
         <div className="border border-foreground/10">
           <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-5 py-3">
             <span className="type-label text-muted-foreground">
-              install command
+              {target === "remote" ? "install command" : "run from the repo root"}
             </span>
             <Button
               variant="accent"
@@ -169,11 +243,74 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
         </div>
 
         <p className="mt-6 text-sm text-muted-foreground">
-          Leave <code className="font-mono text-foreground">REGISTRY_URL</code> out and the node is
-          simply unlisted — renters who know its URL can still pay it normally.
+          Leave <Code>REGISTRY_URL</Code> out and the node is simply unlisted — renters who know its
+          URL can still pay it normally.
         </p>
+
+        <div className="mt-8 border-t border-foreground/10 pt-8">
+          <span className="mb-4 block type-label text-muted-foreground">Then what</span>
+          <ol className="space-y-4 text-sm text-muted-foreground">
+            <Step n="1">
+              The node starts announcing itself every 30 seconds. It appears on{" "}
+              <a href="/nodes" className="text-foreground underline-offset-4 hover:text-accent hover:underline">
+                the nodes page
+              </a>{" "}
+              within a few seconds of starting — no account, no approval.
+            </Step>
+            <Step n="2">
+              Renters click through to your listing and pay you directly, from their own wallet.
+              Nothing routes through us.
+            </Step>
+            <Step n="3">
+              Earnings land in your account as each payment settles, and every one is appended to{" "}
+              <Code>receipts.jsonl</Code> beside your config, so you can audit them without
+              trusting this website.
+            </Step>
+            <Step n="4">
+              Press <Code>q</Code> in the dashboard to stop. The node tells the registry it is
+              going offline so it stops being advertised immediately, rather than looking available
+              for another minute and a half.
+            </Step>
+          </ol>
+        </div>
       </div>
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  title,
+  body,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  body: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`cursor-pointer border p-4 text-left transition-colors ${
+        active
+          ? "border-accent bg-accent/[0.06]"
+          : "border-foreground/10 hover:border-foreground/25"
+      }`}
+    >
+      <span className="mb-1 block text-sm font-medium">{title}</span>
+      <span className="block text-xs text-muted-foreground">{body}</span>
+    </button>
+  );
+}
+
+function Step({ n, children }: { n: string; children: React.ReactNode }) {
+  return (
+    <li className="grid grid-cols-[24px_1fr] gap-3">
+      <span className="font-mono text-accent">{n}</span>
+      <span>{children}</span>
+    </li>
   );
 }
 
@@ -192,9 +329,7 @@ function Field({
 }) {
   return (
     <label className="mb-6 block">
-      <span className="mb-2 block type-label text-muted-foreground">
-        {label}
-      </span>
+      <span className="mb-2 block type-label text-muted-foreground">{label}</span>
       {children}
       <span className="mt-2 block text-sm text-muted-foreground">{hint}</span>
     </label>

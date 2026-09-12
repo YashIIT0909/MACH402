@@ -281,6 +281,17 @@ function Lease({ node }: { node: NodeListing }) {
         per minute · {reach}
         {offer.gpu ? "" : " · cpu only"}
       </Sub>
+      {/* Only an online node can actually be rented. Offering the link on an
+          offline one would send a renter to a page whose only content is an
+          explanation of why they cannot buy anything. */}
+      {node.online ? (
+        <Link
+          href={`/rent/${node.node_id}`}
+          className="mt-2 inline-block text-sm text-accent underline-offset-4 hover:underline"
+        >
+          Rent by the minute →
+        </Link>
+      ) : null}
     </span>
   );
 }
