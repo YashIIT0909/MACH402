@@ -102,6 +102,33 @@ type Config struct {
 
 	// DockerHost is the Docker endpoint. Unix socket by default.
 	DockerHost string `yaml:"docker_host"`
+
+	// CORS governs which web origins a browser may call this node from.
+	//
+	// Needed because a renter paying from the ClearGate website is a browser
+	// talking straight to this node — payments are renter -> node, direct
+	// (CLAUDE.md invariant 3), so there is no server in between to relay them.
+	CORS CORS `yaml:"cors"`
+}
+
+// CORS is the browser-origin policy for this node's API.
+//
+// Permissive by default, and that is a considered position rather than a
+// shortcut: every authenticated endpoint here is guarded by a bearer token in a
+// header that the renter was handed at payment time, and *nothing* on this node
+// authenticates with a cookie. Cross-origin access therefore grants a hostile
+// page nothing it could not already do by calling the node from its own server,
+// because there is no ambient authority in a browser for it to borrow. The
+// classic reason to lock CORS down — a logged-in victim's cookies riding along
+// on a forged request — does not exist here.
+//
+// What is never sent is `Access-Control-Allow-Credentials`, which is what would
+// change that answer.
+type CORS struct {
+	// AllowedOrigins is the set of origins permitted to call this node, or
+	// ["*"] for any. A provider who serves their own renter UI can narrow this
+	// to their own site.
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // Hedera configures the node's one indirect route to signing a transaction.
@@ -398,6 +425,23 @@ func Default() Config {
 		},
 		ReceiptsPath: "receipts.jsonl",
 		DockerHost:   "unix:///var/run/docker.sock",
+		CORS:         DefaultCORS(),
+	}
+}
+
+// DefaultCORS allows any origin. See the CORS type for why that is safe here.
+func DefaultCORS() CORS {
+	return CORS{AllowedOrigins: []string{"*"}}
+}
+
+// applyDefaults treats an absent or empty `cors:` block as "unset".
+//
+// An empty allowlist would otherwise mean "no browser may ever call this node",
+// which is a setting nobody asks for by leaving a block out — and it would
+// break the website's rent flow on every node whose config predates it.
+func (c *CORS) applyDefaults() {
+	if len(c.AllowedOrigins) == 0 {
+		c.AllowedOrigins = DefaultCORS().AllowedOrigins
 	}
 }
 
@@ -496,6 +540,7 @@ func Load(path string) (Config, error) {
 	}
 	cfg.Leases.applyDefaults(filepath.Dir(path))
 	cfg.Hedera.applyDefaults(filepath.Dir(path))
+	cfg.CORS.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
 	}
