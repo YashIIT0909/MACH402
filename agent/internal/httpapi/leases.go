@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
@@ -381,17 +382,22 @@ const leaseSweepInterval = 15 * time.Second
 
 func (s *Server) sweepLeases(ctx context.Context) {
 	lease, ok := s.runner.ActiveLease()
-	if !ok || lease.Status().IsTerminal() {
+	if !ok {
+		return
+	}
+	if lease.Status().IsTerminal() {
+		// A session that ended some other way may still have its deposit in the
+		// contract. Same loop, because it is the same event — the session is
+		// over — and a second scheduler for it would be one more thing to keep
+		// in agreement with this one.
+		s.settleSession(ctx, lease)
 		return
 	}
 
 	leases := s.cfg.Leases
 	switch lease.Status() {
 	case runner.LeaseActive:
-		// A "missed extension" is one slice's worth of time gone by unpaid, so
-		// the tolerance scales with what the renter was actually buying.
-		slice := time.Duration(lease.SliceMinutes()) * time.Minute
-		if lease.OverdueBy() < time.Duration(leases.MissedExtensions)*slice {
+		if lease.OverdueBy() < s.freezeTolerance(lease) {
 			return
 		}
 		if err := s.runner.PauseLease(ctx, lease); err != nil {
@@ -405,8 +411,45 @@ func (s *Server) sweepLeases(ctx context.Context) {
 		s.log.Info("reaping a lease whose grace period ran out", "lease", lease.ID)
 		s.runner.StopLease(ctx, lease, runner.LeaseExpired)
 		s.tunnel.Clear(ctx)
+		// Settled with the lease we already hold, NOT by looking it up again:
+		// StopLease releases the node's single lease slot, so by this point
+		// ActiveLease no longer returns it and a re-lookup would silently find
+		// nothing and settle nothing.
+		//
+		// An expired session's deposit is by now entirely the provider's —
+		// elapsed has reached the paid duration, so there is nothing to refund —
+		// but it stays in the contract until somebody calls settle.
+		s.settleSession(ctx, lease)
 	}
 }
+
+// freezeTolerance is how far past expiry a container runs before it is frozen.
+//
+// The two payment models need different answers, because "overdue" means
+// different things:
+//
+//   - A direct-paid lease is overdue when the renter has not bought the next
+//     slice, so the tolerance scales with the slice they were buying: someone
+//     purchasing an hour at a time should not be frozen for being a minute
+//     late.
+//   - An escrow session is overdue the moment the clock passes what the
+//     CONTRACT says was paid for. There is no slice to be late on, and running
+//     past that point is time the contract will never pay the provider for —
+//     `elapsed` is capped at the paid duration. So the tolerance is small and
+//     fixed, just enough to absorb a top-up that is confirmed but not yet
+//     visible to the node.
+func (s *Server) freezeTolerance(lease *runner.Lease) time.Duration {
+	if lease.SessionID() != "" {
+		return sessionFreezeGrace
+	}
+	slice := time.Duration(lease.SliceMinutes()) * time.Minute
+	return time.Duration(s.cfg.Leases.MissedExtensions) * slice
+}
+
+// sessionFreezeGrace covers mirror-node lag on a top-up: the renter's money is
+// already on consensus, and freezing them for the seconds it takes the node to
+// see it would be punishing them for our own read latency.
+const sessionFreezeGrace = 30 * time.Second
 
 // leasePrice multiplies the per-minute price by the minutes bought.
 //
@@ -452,6 +495,18 @@ func (s *Server) recordLeasePayment(leaseID string, settlement *x402.SettleRespo
 		s.log.Error("could not write lease receipt",
 			"lease", leaseID, "transaction", settlement.Transaction, "error", err)
 	}
+	// Extensions land here too, so the audit topic shows a metered lease as the
+	// sequence of slices it actually was — same as the local log.
+	s.publishAudit(hcs.AuditMessage{
+		Kind:           hcs.KindLease,
+		JobID:          leaseID,
+		Transaction:    settlement.Transaction,
+		Payer:          settlement.Payer,
+		PayTo:          requirements.PayTo,
+		AmountTinybars: requirements.Amount,
+		Asset:          requirements.Asset,
+		Network:        requirements.Network,
+	})
 
 	s.log.Info("lease paid",
 		"lease", leaseID,

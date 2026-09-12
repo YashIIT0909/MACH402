@@ -30,6 +30,7 @@ func main() {
 	root.AddCommand(newTUICommand())
 	root.AddCommand(newSetupCommand())
 	root.AddCommand(newEarningsCommand())
+	root.AddCommand(newRegisterCommand())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

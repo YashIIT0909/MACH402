@@ -81,6 +81,14 @@ func serve(parent context.Context, configPath string) error {
 	)
 
 	server := httpapi.New(cfg, run, fac, log, version)
+
+	// The signing sidecar and everything built on it. Failures here are logged
+	// and survived rather than fatal, for the same reason a tunnel failure is:
+	// a node that cannot publish its audit trail should still sell compute.
+	if err := enableHedera(ctx, cfg, server, log); err != nil {
+		log.Error("Hedera features are configured but could not be started", "error", err)
+	}
+
 	if leasing != nil {
 		server.EnableLeases(leasing.ca, leasing.tunnel)
 

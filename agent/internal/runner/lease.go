@@ -117,7 +117,42 @@ type Lease struct {
 	paidMinutes  int
 	pausedAt     *time.Time
 	err          string
+
+	// Escrow fields, set only on a lease sold as a session
+	// (leases.payment_mode: escrow). A session IS a lease — same container,
+	// same certificate, same freeze-and-reap — differing only in how it was
+	// paid for and therefore in what happens when it ends.
+	//
+	// sessionID is the contract's key; empty on a direct-paid lease, which is
+	// how the rest of the code tells the two apart.
+	sessionID string
+	// depositTx is the renter's openSession transaction, kept for the receipt
+	// and the audit trail.
+	depositTx string
+	// settleState tracks whether the on-chain split has happened yet. A reaped
+	// session that is still unsettled is money sitting in the contract that
+	// belongs to someone, so the sweep can act on it.
+	settleState SettleState
+	// paidSeconds is the duration the CONTRACT says was bought, which is the
+	// only authority on it. Kept in seconds rather than derived from paidMinutes
+	// because a top-up is compared against it exactly: rounding to minutes would
+	// make a legitimate top-up look like no change at all.
+	paidSeconds int64
 }
+
+// SettleState is where an escrow session stands with the contract.
+type SettleState string
+
+const (
+	// SettleNotApplicable is a direct-paid lease: settled at the facilitator
+	// the moment it started, with nothing on-chain left to close.
+	SettleNotApplicable SettleState = ""
+	// SettlePending means the session is over and the contract still holds the
+	// deposit. Either party may close it; `settle` is permissionless.
+	SettlePending SettleState = "pending"
+	// SettleDone means the split has been executed on-chain.
+	SettleDone SettleState = "done"
+)
 
 // LeaseState is the read-only view returned by GET /v1/leases/:id.
 //
@@ -155,6 +190,82 @@ func (l *Lease) State() LeaseState {
 		state.Error = &message
 	}
 	return state
+}
+
+// MarkEscrow records that this lease was paid for through the escrow contract.
+//
+// Called once, right after the deposit is verified. From here on the lease
+// behaves identically to a direct-paid one except at the end, where the
+// contract has a split to perform.
+func (l *Lease) MarkEscrow(sessionID, depositTx string, expiresAt time.Time, paidSeconds int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sessionID = sessionID
+	l.depositTx = depositTx
+	l.settleState = SettlePending
+	l.paidSeconds = paidSeconds
+	// The on-chain record is authoritative about when the paid time ends: the
+	// contract computes the split from its own startTime, so a node clock that
+	// disagrees would freeze a container early or late.
+	l.expiresAt = expiresAt
+}
+
+// SessionID is the escrow session backing this lease, or "" for a direct-paid
+// lease. This is what distinguishes the two everywhere else in the code.
+func (l *Lease) SessionID() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.sessionID
+}
+
+// DepositTransaction is the renter's openSession transaction id.
+func (l *Lease) DepositTransaction() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.depositTx
+}
+
+// SettleState reports whether the on-chain split still needs doing.
+func (l *Lease) SettleState() SettleState {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.settleState
+}
+
+// MarkSettled records that the contract has performed the split.
+//
+// Idempotent, and it must be: `settle` is permissionless, so the renter's
+// clean-exit call and this node's self-settle can both succeed in either order
+// — the contract's one-shot guard sorts that out, and this only records what
+// already happened.
+func (l *Lease) MarkSettled() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.settleState != SettleNotApplicable {
+		l.settleState = SettleDone
+	}
+}
+
+// ExtendPaidUntil moves a session's expiry after a verified top-up.
+//
+// Unlike ExtendLease this takes an absolute time rather than minutes, because
+// the contract's `startTime + duration` is the authority on when a session ends
+// and the node mirrors it rather than recomputing it.
+func (l *Lease) ExtendPaidUntil(expiresAt time.Time, paidSeconds int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.expiresAt = expiresAt
+	l.paidSeconds = paidSeconds
+	l.paidMinutes = int((paidSeconds + 59) / 60)
+}
+
+// PaidSeconds is the duration the contract says was bought, in seconds.
+//
+// Zero on a direct-paid lease, which has no on-chain duration at all.
+func (l *Lease) PaidSeconds() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.paidSeconds
 }
 
 // Status reads the current status.
@@ -806,6 +917,36 @@ func (r *Runner) RevertExtension(ctx context.Context, lease *Lease, previous Ext
 // their memory and their open files, so a renter who is mid-training run and
 // slow to pay gets their session back when they extend. The grace period after
 // this is what eventually turns a frozen lease into a reaped one.
+// ResumeLease thaws a frozen container without buying time.
+//
+// The direct-payment path thaws inside ExtendLease, because there the act of
+// paying and the act of extending are one operation. An escrow session pays at
+// the contract before it ever reaches the node, so by the time the node hears
+// about it the only thing left to do is unfreeze — which is this.
+//
+// A renter mid-task who was slow to top up gets their work back exactly as
+// they left it: pause is the cgroup freezer, not a kill.
+func (r *Runner) ResumeLease(ctx context.Context, lease *Lease) error {
+	lease.mu.Lock()
+	if lease.status != LeasePaused {
+		lease.mu.Unlock()
+		return nil
+	}
+	containerID := lease.containerID
+	lease.pausedAt = nil
+	lease.status = LeaseActive
+	lease.mu.Unlock()
+
+	if containerID == "" {
+		return nil
+	}
+	if err := r.docker.UnpauseContainer(ctx, containerID); err != nil {
+		return fmt.Errorf("thaw the session container: %w", err)
+	}
+	r.log.Info("session resumed after a top-up", "lease", lease.ID)
+	return nil
+}
+
 func (r *Runner) PauseLease(ctx context.Context, lease *Lease) error {
 	lease.mu.Lock()
 	if lease.status != LeaseActive {

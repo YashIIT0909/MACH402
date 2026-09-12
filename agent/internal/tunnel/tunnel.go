@@ -279,6 +279,14 @@ func (m *Manager) pointQuickLocked(ctx context.Context, target Target) (Endpoint
 		return Endpoints{}, err
 	}
 
+	// Give Cloudflare edge DNS 3 seconds to propagate before running the reachability check.
+	select {
+	case <-time.After(3 * time.Second):
+	case <-ctx.Done():
+		m.stopLocked()
+		return Endpoints{}, ctx.Err()
+	}
+
 	m.target = &target
 	m.quickURL = url
 	m.log.Info("quick tunnel up", "lease", target.LeaseID, "url", url)
@@ -300,7 +308,8 @@ var quickURLPattern = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com
 // up before the lease is abandoned unsettled.
 const quickTunnelTimeout = 45 * time.Second
 
-// awaitQuickURL reads cloudflared's banner until the assigned hostname appears.
+// awaitQuickURL reads cloudflared's banner until the assigned hostname appears
+// and the connection to Cloudflare's edge is registered.
 //
 // The output has to keep being drained afterwards, or cloudflared blocks on a
 // full pipe and the tunnel dies partway through someone's paid session.
@@ -310,19 +319,29 @@ func (m *Manager) awaitQuickURL(ctx context.Context, output io.Reader) (string, 
 	go func() {
 		scanner := bufio.NewScanner(output)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		var assignedURL string
 		reported := false
+
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !reported {
+			if assignedURL == "" {
 				if match := quickURLPattern.FindString(line); match != "" {
-					found <- match
+					assignedURL = match
+				}
+			}
+			if assignedURL != "" && !reported {
+				// Wait until cloudflared registers its edge connection so edge DNS is live.
+				if strings.Contains(line, "Registered tunnel connection") || strings.Contains(line, "connection=") {
+					found <- assignedURL
 					reported = true
-					continue
 				}
 			}
 			m.log.Debug("cloudflared", "line", line)
 		}
-		if !reported {
+		if assignedURL != "" && !reported {
+			found <- assignedURL
+			reported = true
+		} else if !reported {
 			close(found)
 		}
 	}()

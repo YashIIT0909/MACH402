@@ -53,6 +53,16 @@ func TestValidateRejectsEmptyAllowlist(t *testing.T) {
 	}
 }
 
+func TestValidateForSetupAllowsHCSBeforeTopicCreation(t *testing.T) {
+	cfg := validConfig()
+	cfg.Hedera.Enabled = true
+	cfg.HCS.Enabled = true
+	cfg.HCS.TopicID = ""
+	if err := cfg.ValidateForSetup(); err != nil {
+		t.Fatalf("setup should permit HCS to be enabled before the topic exists: %v", err)
+	}
+}
+
 // A node with no registry_url is unlisted, not misconfigured: renters who know
 // its URL still pay it directly.
 func TestValidateAllowsAnUnlistedNode(t *testing.T) {

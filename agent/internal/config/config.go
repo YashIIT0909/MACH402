@@ -76,6 +76,21 @@ type Config struct {
 	// be switched on as a side effect of enabling something else.
 	Leases Leases `yaml:"leases"`
 
+	// Hedera configures the signing sidecar and the mirror node.
+	//
+	// Off unless a provider opted in. When it is on, the node has a key file on
+	// disk for the first time — read by the `cleargate-hedera` child process,
+	// never by this binary — so it stays an explicit choice rather than
+	// something another feature can switch on for you.
+	Hedera Hedera `yaml:"hedera"`
+
+	// HCS publishes every settlement to a topic this provider owns, so earnings
+	// can be audited without trusting our website or this node's own log.
+	HCS HCS `yaml:"hcs"`
+
+	// Identity is this provider's ERC-8004 agent registration.
+	Identity Identity `yaml:"identity"`
+
 	// Limits cap what one job may consume.
 	Limits Limits `yaml:"limits"`
 
@@ -87,6 +102,67 @@ type Config struct {
 
 	// DockerHost is the Docker endpoint. Unix socket by default.
 	DockerHost string `yaml:"docker_host"`
+}
+
+// Hedera configures the node's one indirect route to signing a transaction.
+//
+// The agent itself still links no Hedera SDK and reads no key (CLAUDE.md
+// invariant 1). What this block enables is a child process — `cleargate-hedera`,
+// from the hederakit package — that the node invokes the same way internal/sshca
+// invokes ssh-keygen and internal/tunnel invokes cloudflared. The key file named
+// here is read by that process and never by this binary.
+//
+// The account behind that key is NOT pay_to. pay_to accumulates a provider's
+// earnings and signs nothing; this one holds a few HBAR of fee float and is the
+// only thing a compromise could reach.
+type Hedera struct {
+	Enabled bool `yaml:"enabled"`
+
+	// Sidecar is the command to invoke. A bare name is looked up on PATH.
+	Sidecar string `yaml:"sidecar"`
+
+	// OperatorKeyPath is the node-local key file, mode 0600, generated at setup
+	// and never transmitted. Relative paths resolve against config.yaml's
+	// directory, like ca_key_path.
+	OperatorKeyPath string `yaml:"operator_key_path"`
+
+	// OperatorAccountID is the resolved 0.0.x for that key, cached here once
+	// the account has been funded into existence.
+	OperatorAccountID string `yaml:"operator_account_id"`
+
+	// MirrorURL is the public mirror node the agent reads to verify deposits
+	// and resolve addresses. Reading needs no key, which is what lets escrow
+	// verification live in Go at all.
+	MirrorURL string `yaml:"mirror_url"`
+}
+
+// HCS is the provider's public audit trail.
+type HCS struct {
+	Enabled bool `yaml:"enabled"`
+
+	// TopicID is created once at setup. The topic's submit key is the operator
+	// key, so only this provider can write to their own trail; it has no admin
+	// key, so nobody — including the provider — can delete or rewrite it.
+	TopicID string `yaml:"topic_id"`
+}
+
+// Identity is this node's ERC-8004 registration.
+//
+// Written by `cleargate-node register` and only read afterwards. `serve` never
+// registers: minting a second identity would orphan the first, and an identity
+// that appears as a side effect of starting a daemon is not an identity anyone
+// chose to claim.
+type Identity struct {
+	// AgentID is 0 until registered. The contract issues ids from 1 precisely
+	// so that 0 stays usable as "not registered".
+	AgentID uint64 `yaml:"agent_id"`
+
+	// AgentAddress is the operator key's EVM address, which is what the
+	// registration is bound to on-chain.
+	AgentAddress string `yaml:"agent_address"`
+
+	// RegistryContractID is the IdentityRegistry deployment to register with.
+	RegistryContractID string `yaml:"registry_contract_id"`
 }
 
 // Dataset is the policy for fetching renter-supplied dataset URLs.
@@ -170,7 +246,48 @@ type Leases struct {
 	// Tunnel is how a renter reaches the container from outside the provider's
 	// NAT.
 	Tunnel Tunnel `yaml:"tunnel"`
+
+	// PaymentMode selects how interactive time is paid for.
+	//
+	// "direct" is the original flow: a forward transfer per slice through the
+	// facilitator, no refunds, which is what every existing node does.
+	// "escrow" routes payment through the SessionEscrow contract instead, so a
+	// renter who stops early gets their unused time back.
+	//
+	// Added behind a flag rather than replacing direct, per the project's rule
+	// about preferring a config flag over changing working behaviour: every
+	// tagged milestone has to stay demoable, and `make smoke` exercises direct.
+	PaymentMode string `yaml:"payment_mode"`
+
+	// EscrowContractID is the SessionEscrow deployment, as a contract id or EVM
+	// address. Public configuration, not a secret.
+	EscrowContractID string `yaml:"escrow_contract_id"`
+
+	// PriceTinybarsPerSecond is the rate the contract settles at. Left empty it
+	// is derived from PriceTinybarsPerMinute, rounding up.
+	//
+	// The contract multiplies this by elapsed seconds, so once a session opens
+	// this is the only price that matters — which is why the node converts once
+	// at quote time and treats the per-second figure as authoritative from then
+	// on, rather than converting in two places that could disagree.
+	PriceTinybarsPerSecond string `yaml:"price_tinybars_per_second"`
+
+	// SelfSettle lets the node close an expired session itself, through the
+	// sidecar, instead of waiting for the renter to do it.
+	//
+	// Off by default so the baseline story stays "the node needs no key at all".
+	// Turning it on grants no power worth worrying about: settle is
+	// permissionless at the contract and calling it early only ever pays the
+	// caller's own side LESS. What it buys is that a provider still gets paid
+	// when a renter force-quits and never calls settle themselves.
+	SelfSettle bool `yaml:"self_settle"`
 }
+
+// Lease payment modes. See Leases.PaymentMode.
+const (
+	PaymentDirect = "direct"
+	PaymentEscrow = "escrow"
+)
 
 // LeaseLimits caps one lease container. Separate from job Limits because an
 // interactive session is sized for a person working, not for one batch script:
@@ -271,6 +388,7 @@ func Default() Config {
 			TimeoutSeconds: 1800,
 		},
 		Leases: DefaultLeases(),
+		Hedera: DefaultHedera(),
 		Limits: Limits{
 			MaxSeconds:    900,
 			MemoryMB:      4096,
@@ -326,8 +444,26 @@ func DefaultLeases() Leases {
 			Mode:   TunnelQuick,
 			Binary: "cloudflared",
 		},
+		// Direct, not escrow: escrow needs a deployed contract and a funded
+		// operator key, neither of which a node has until someone opts in.
+		PaymentMode: PaymentDirect,
 	}
 }
+
+// DefaultHedera is the signing sidecar's configuration when a node opts in.
+// Disabled here for the same reason leases are: a key file on disk is a choice
+// a provider makes, never a side effect.
+func DefaultHedera() Hedera {
+	return Hedera{
+		Enabled:         false,
+		Sidecar:         "cleargate-hedera",
+		OperatorKeyPath: "hedera-operator",
+		MirrorURL:       DefaultMirrorURL,
+	}
+}
+
+// DefaultMirrorURL is Hedera's public testnet mirror node.
+const DefaultMirrorURL = "https://testnet.mirrornode.hedera.com"
 
 // Tunnel modes. See Tunnel.Mode.
 const (
@@ -359,6 +495,7 @@ func Load(path string) (Config, error) {
 		cfg.Dataset.TimeoutSeconds = Default().Dataset.TimeoutSeconds
 	}
 	cfg.Leases.applyDefaults(filepath.Dir(path))
+	cfg.Hedera.applyDefaults(filepath.Dir(path))
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
 	}
@@ -426,12 +563,37 @@ func (l *Leases) applyDefaults(configDir string) {
 	if l.Tunnel.ConfigDir == "" {
 		l.Tunnel.ConfigDir = "cloudflared"
 	}
+	if l.PaymentMode == "" {
+		l.PaymentMode = fallback.PaymentMode
+	}
 
 	if configDir == "" {
 		configDir = "."
 	}
 	l.CAKeyPath = resolveAgainst(configDir, l.CAKeyPath)
 	l.Tunnel.ConfigDir = resolveAgainst(configDir, l.Tunnel.ConfigDir)
+}
+
+// applyDefaults fills in a `hedera:` block that an older config never had, and
+// resolves the key path against config.yaml's directory so a node started from
+// elsewhere still finds its own key — the same rule as the SSH CA.
+func (h *Hedera) applyDefaults(configDir string) {
+	fallback := DefaultHedera()
+
+	if h.Sidecar == "" {
+		h.Sidecar = fallback.Sidecar
+	}
+	if h.OperatorKeyPath == "" {
+		h.OperatorKeyPath = fallback.OperatorKeyPath
+	}
+	if h.MirrorURL == "" {
+		h.MirrorURL = fallback.MirrorURL
+	}
+
+	if configDir == "" {
+		configDir = "."
+	}
+	h.OperatorKeyPath = resolveAgainst(configDir, h.OperatorKeyPath)
 }
 
 func resolveAgainst(dir, path string) string {
@@ -465,6 +627,32 @@ func Save(path string, cfg Config) error {
 // Validate rejects configurations that would produce an unpayable challenge or
 // an unsafe container.
 func (c Config) Validate() error {
+	if err := c.validateBase(); err != nil {
+		return err
+	}
+	if c.HCS.Enabled && !c.Hedera.Enabled {
+		return errors.New("hcs.enabled needs hedera.enabled — publishing to a topic requires the signing sidecar")
+	}
+	if c.HCS.Enabled && c.HCS.TopicID == "" {
+		return errors.New("hcs.enabled is set but hcs.topic_id is empty — re-run `cleargate-node setup --enable-hcs` to create one")
+	}
+	return nil
+}
+
+// ValidateForSetup allows HCS to be enabled while still creating the topic in the
+// same setup run. The runtime config remains stricter: a saved config without a
+// topic is invalid, but setup itself is the thing that creates it.
+func (c Config) ValidateForSetup() error {
+	if err := c.validateBase(); err != nil {
+		return err
+	}
+	if c.HCS.Enabled && !c.Hedera.Enabled {
+		return errors.New("hcs.enabled needs hedera.enabled — publishing to a topic requires the signing sidecar")
+	}
+	return nil
+}
+
+func (c Config) validateBase() error {
 	if !isHederaAccountID(c.PayTo) {
 		return fmt.Errorf("pay_to %q is not a Hedera account id like 0.0.1234", c.PayTo)
 	}
@@ -502,6 +690,19 @@ func (c Config) Validate() error {
 	if err := c.Leases.validate(); err != nil {
 		return err
 	}
+	if err := c.Hedera.validate(); err != nil {
+		return err
+	}
+	if err := c.Identity.validate(); err != nil {
+		return err
+	}
+	// Escrow verification is a mirror-node read and self-settle is a sidecar
+	// call, so escrow mode cannot work without the hedera block turned on.
+	// Catching it here means a provider finds out at startup rather than when a
+	// renter's deposit cannot be checked.
+	if c.Leases.Enabled && c.Leases.PaymentMode == PaymentEscrow && !c.Hedera.Enabled {
+		return errors.New("leases.payment_mode is escrow, which needs hedera.enabled — re-run `cleargate-node setup --enable-escrow`")
+	}
 	return nil
 }
 
@@ -535,6 +736,56 @@ func (l Leases) validate() error {
 	}
 	if l.Egress.ProxyImage == "" {
 		return errors.New("leases.egress.proxy_image must be set — lease containers reach the network only through it")
+	}
+	switch l.PaymentMode {
+	case PaymentDirect:
+	case PaymentEscrow:
+		// Escrow mode with no contract would 402 every renter into depositing
+		// nowhere, so this is refused at load rather than at the first sale.
+		if l.EscrowContractID == "" {
+			return errors.New("leases.payment_mode is escrow, so leases.escrow_contract_id must name the deployed SessionEscrow")
+		}
+	default:
+		return fmt.Errorf("leases.payment_mode %q must be %q or %q", l.PaymentMode, PaymentDirect, PaymentEscrow)
+	}
+	if l.PriceTinybarsPerSecond != "" {
+		if _, err := strconv.ParseUint(l.PriceTinybarsPerSecond, 10, 64); err != nil {
+			return fmt.Errorf("leases.price_tinybars_per_second %q must be a whole number of tinybars, as a string",
+				l.PriceTinybarsPerSecond)
+		}
+	}
+	return nil
+}
+
+// validate checks the signing sidecar's configuration.
+//
+// Only meaningful when enabled: a node that never opted in has no key, no
+// sidecar and nothing to get wrong.
+func (h Hedera) validate() error {
+	if !h.Enabled {
+		return nil
+	}
+	if h.Sidecar == "" {
+		return errors.New("hedera.sidecar must name the cleargate-hedera command")
+	}
+	if h.OperatorKeyPath == "" {
+		return errors.New("hedera.operator_key_path must be set — it is where this node's operator key lives")
+	}
+	if h.MirrorURL == "" {
+		return errors.New("hedera.mirror_url must be set — the node reads it to verify deposits")
+	}
+	if h.OperatorAccountID != "" && !isHederaAccountID(h.OperatorAccountID) {
+		return fmt.Errorf("hedera.operator_account_id %q is not a Hedera account id like 0.0.1234", h.OperatorAccountID)
+	}
+	return nil
+}
+
+// validate checks the ERC-8004 registration block.
+func (i Identity) validate() error {
+	// An agent id without the contract it was issued by is unresolvable — the
+	// number alone means nothing without knowing which registry minted it.
+	if i.AgentID != 0 && i.RegistryContractID == "" {
+		return errors.New("identity.agent_id is set but identity.registry_contract_id is not; an agent id is meaningless without the registry that issued it")
 	}
 	return nil
 }

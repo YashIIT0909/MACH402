@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
+	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
+	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
 	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
@@ -40,6 +43,22 @@ type Server struct {
 	ca     *sshca.CA
 	tunnel *tunnel.Manager
 
+	// audit publishes settlements to the provider's own HCS topic. nil unless
+	// they opted in, and every call site publishes unconditionally — a nil
+	// publisher is a no-op, so the settlement paths do not sprout enabled
+	// checks.
+	audit *hcs.Publisher
+
+	// escrow verifies deposits by reading the mirror node. nil unless this node
+	// sells sessions rather than direct-paid leases. It holds no key: verifying
+	// a contract call needs only public data (CLAUDE.md invariant 1).
+	escrow *escrow.Verifier
+	// providerAddress is pay_to as an EVM address, resolved once at startup.
+	// Read from the mirror node, never derived — see escrow.ResolveProviderAddress.
+	providerAddress string
+	// sidecar is present only when leases.self_settle is on.
+	sidecar *hedera.Sidecar
+
 	// paused stops the node selling new jobs without stopping the ones already
 	// running. The provider's dashboard toggles it; a renter sees a 503 with a
 	// Retry-After rather than a challenge they would pay and regret.
@@ -56,6 +75,35 @@ func New(cfg config.Config, run *runner.Runner, fac *x402.Facilitator, log *slog
 		log:      log,
 		version:  version,
 	}
+}
+
+// EnableAudit attaches the provider's HCS publisher.
+//
+// Separate from New for the same reason EnableLeases is: publishing needs a key
+// on disk and a funded account, which a node that never opted in does not have.
+func (s *Server) EnableAudit(publisher *hcs.Publisher) {
+	s.audit = publisher
+}
+
+// EnableEscrow attaches everything the session payment path needs.
+//
+// providerAddress is pay_to in EVM form, resolved from the mirror node at
+// startup so a misconfigured account fails loudly there rather than when a
+// renter's money is already in the contract. sidecar may be nil, which simply
+// means the node will not settle expired sessions itself.
+func (s *Server) EnableEscrow(verifier *escrow.Verifier, providerAddress string, sidecar *hedera.Sidecar) {
+	s.escrow = verifier
+	s.providerAddress = providerAddress
+	s.sidecar = sidecar
+}
+
+// publishAudit records a settlement on the provider's topic, if they have one.
+//
+// Safe to call unconditionally: a node that did not opt into HCS has a nil
+// publisher and this does nothing. It never returns an error, because a failed
+// publish must not fail a paid request — see hcs.Publisher.Publish.
+func (s *Server) publishAudit(msg hcs.AuditMessage) {
+	s.audit.Publish(msg)
 }
 
 // EnableLeases attaches the two things a lease needs that a job does not: the
@@ -118,6 +166,20 @@ func (s *Server) Handler() http.Handler {
 	// and charging to stop would punish a renter for releasing the machine.
 	mux.HandleFunc("GET /v1/leases/{id}", s.handleLeaseState)
 	mux.HandleFunc("POST /v1/leases/{id}/stop", s.handleLeaseStop)
+
+	// escrow-gated. Payment is a deposit the renter already made at the
+	// contract, proved with a transaction id, so these answer 402 with a quote
+	// rather than an x402 challenge — there is no transfer for anyone to sign.
+	mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
+	mux.HandleFunc("POST /v1/sessions/{id}/topup", s.handleTopUpSession)
+
+	// session-token-gated, free. Stopping is free and deliberately so: it is
+	// what triggers the renter's refund, and charging for it would be perverse.
+	mux.HandleFunc("GET /v1/sessions/{id}", s.handleSessionState)
+	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.handleSessionStop)
+
+	// free. The card an ERC-8004 agent id resolves to — see handleAgentCard.
+	mux.HandleFunc("GET /.well-known/agent-card.json", s.handleAgentCard)
 
 	return s.withLogging(mux)
 }

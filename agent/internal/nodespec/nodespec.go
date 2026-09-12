@@ -7,6 +7,7 @@ package nodespec
 
 import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 )
 
@@ -31,6 +32,24 @@ type Spec struct {
 	// Omitted entirely on a node that did not opt in, so a renter's client sees
 	// the same shape it saw before leasing existed.
 	Leases *LeaseOffer `json:"leases,omitempty"`
+
+	// AgentID is this provider's ERC-8004 identity, or 0 if they never ran
+	// `cleargate-node register`. Zero rather than omitted because the contract
+	// issues ids from 1 precisely so that 0 means "not registered".
+	AgentID uint64 `json:"agent_id,omitempty"`
+
+	// AgentAddress is the EVM address that identity is bound to on-chain.
+	AgentAddress string `json:"agent_address,omitempty"`
+
+	// IdentityRegistry is the contract that issued AgentID. Published because
+	// an agent id without its registry is unresolvable — the number alone says
+	// nothing about who minted it.
+	IdentityRegistry string `json:"identity_registry,omitempty"`
+
+	// AuditTopic is the HCS topic this node publishes settlements to, if any.
+	// A renter can read it before paying to see how the provider has actually
+	// behaved, which is the entire point of publishing it.
+	AuditTopic string `json:"audit_topic,omitempty"`
 }
 
 // LeaseOffer is what a renter is buying when they rent a shell rather than
@@ -59,6 +78,17 @@ type LeaseOffer struct {
 	// because it is a real constraint on the work a renter can do here — a lease
 	// that cannot reach the index they need is not the lease they wanted.
 	EgressAllowlist []string `json:"egress_allowlist"`
+
+	// EscrowContract is set only on a node selling refundable sessions, and its
+	// absence is meaningful: it tells a renter this node's interactive time is
+	// forward-paid and not refundable if they stop early. A client picks which
+	// flow to use from this field rather than by trying one and seeing.
+	EscrowContract string `json:"escrow_contract,omitempty"`
+
+	// PriceTinybarsPerSecond is the rate the contract settles at. Per second
+	// rather than per minute because that is the granularity a refund is
+	// computed at, which is the entire reason to choose this flow.
+	PriceTinybarsPerSecond string `json:"price_tinybars_per_second,omitempty"`
 }
 
 // GPU is what this node can actually pass through to a container. Model and
@@ -122,20 +152,31 @@ func Build(cfg config.Config, version, feePayer string, detected runner.GPU, lea
 			WorkspaceGB:     cfg.Leases.Limits.WorkspaceGB,
 			EgressAllowlist: cfg.Leases.Egress.Allowlist,
 		}
+		if cfg.Leases.PaymentMode == config.PaymentEscrow {
+			leases.EscrowContract = cfg.Leases.EscrowContractID
+			leases.PriceTinybarsPerSecond = sessionPrice(cfg.Leases)
+		}
 	}
 
 	return Spec{
-		NodeID:         cfg.NodeID,
-		Leases:         leases,
-		AgentVersion:   version,
-		PayTo:          cfg.PayTo,
-		PriceTinybars:  cfg.PriceTinybars,
-		FacilitatorURL: cfg.FacilitatorURL,
-		Network:        cfg.Network,
-		Asset:          cfg.Asset,
-		ImageAllowlist: cfg.ImageAllowlist,
-		FeePayer:       feePayer,
-		GPU:            gpu,
+		NodeID: cfg.NodeID,
+		Leases: leases,
+		// Identity and audit trail travel with the spec so `/v1/specs`, the
+		// heartbeat and the agent card cannot disagree about them — the same
+		// reason this function exists at all.
+		AgentID:          cfg.Identity.AgentID,
+		AgentAddress:     cfg.Identity.AgentAddress,
+		IdentityRegistry: cfg.Identity.RegistryContractID,
+		AuditTopic:       auditTopic(cfg),
+		AgentVersion:     version,
+		PayTo:            cfg.PayTo,
+		PriceTinybars:    cfg.PriceTinybars,
+		FacilitatorURL:   cfg.FacilitatorURL,
+		Network:          cfg.Network,
+		Asset:            cfg.Asset,
+		ImageAllowlist:   cfg.ImageAllowlist,
+		FeePayer:         feePayer,
+		GPU:              gpu,
 		Limits: Limits{
 			MaxSeconds:    cfg.Limits.MaxSeconds,
 			MemoryMB:      cfg.Limits.MemoryMB,
@@ -143,4 +184,36 @@ func Build(cfg config.Config, version, feePayer string, detected runner.GPU, lea
 			MaxArtifactMB: cfg.Limits.MaxArtifactMB,
 		},
 	}
+}
+
+// auditTopic is the HCS topic this node publishes to, or "" if it does not.
+//
+// Advertised so a renter can audit a provider's settlement history before
+// paying them, rather than only after. A topic id is public by nature — it is
+// readable by anyone through any mirror node — so there is nothing here a
+// provider is giving away.
+func auditTopic(cfg config.Config) string {
+	if !cfg.HCS.Enabled {
+		return ""
+	}
+	return cfg.HCS.TopicID
+}
+
+// sessionPrice is the per-second rate a session settles at.
+//
+// Derived from the per-minute lease price unless a provider set it explicitly,
+// and rounded UP for the reason escrow.PricePerSecond documents: rounding down
+// would quietly pay the provider less than their configured rate, because the
+// contract does the final multiplication.
+func sessionPrice(leases config.Leases) string {
+	if leases.PriceTinybarsPerSecond != "" {
+		return leases.PriceTinybarsPerSecond
+	}
+	price, err := escrow.PricePerSecond(leases.PriceTinybarsPerMinute)
+	if err != nil {
+		// A misconfigured price fails validation at load, so this is
+		// unreachable; advertising nothing beats advertising a wrong number.
+		return ""
+	}
+	return price.String()
 }

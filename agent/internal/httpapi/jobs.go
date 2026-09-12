@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
 	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
@@ -126,6 +127,19 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		// cost the renter a job they already paid for.
 		s.log.Error("could not write receipt", "job", jobID, "transaction", settlement.Transaction, "error", err)
 	}
+	// And to the provider's public audit topic, if they opted in. After the
+	// local append and never blocking on it: receipts.jsonl is the record of
+	// account, this is the copy nobody can edit afterwards.
+	s.publishAudit(hcs.AuditMessage{
+		Kind:           hcs.KindJob,
+		JobID:          jobID,
+		Transaction:    settlement.Transaction,
+		Payer:          settlement.Payer,
+		PayTo:          requirements.PayTo,
+		AmountTinybars: requirements.Amount,
+		Asset:          requirements.Asset,
+		Network:        requirements.Network,
+	})
 
 	s.log.Info("job paid",
 		"job", jobID,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -41,6 +42,11 @@ func newSetupCommand() *cobra.Command {
 			opts.leases, _ = cmd.Flags().GetBool("enable-leases")
 			opts.leasePrice, _ = cmd.Flags().GetString("lease-price-tinybars-per-minute")
 			opts.tunnelMode, _ = cmd.Flags().GetString("tunnel-mode")
+			opts.hcs, _ = cmd.Flags().GetBool("enable-hcs")
+			opts.escrow, _ = cmd.Flags().GetBool("enable-escrow")
+			opts.escrowContract, _ = cmd.Flags().GetString("escrow-contract")
+			opts.identityContract, _ = cmd.Flags().GetString("identity-contract")
+			opts.selfSettle, _ = cmd.Flags().GetBool("self-settle")
 			return setup(cmd.Context(), opts)
 		},
 	}
@@ -59,6 +65,19 @@ func newSetupCommand() *cobra.Command {
 		"price of one minute of interactive time, in tinybars (only with --enable-leases)")
 	cmd.Flags().String("tunnel-mode", "",
 		"how renters reach a lease: \"quick\" (no Cloudflare account, Jupyter only) or \"named\" (registry-provisioned, adds SSH)")
+	// Both of these create a node-local Hedera key, which is the first time
+	// anything in this repo puts key material on a provider's machine. That is
+	// why they are explicit flags rather than implied by anything else.
+	cmd.Flags().Bool("enable-hcs", false,
+		"publish every settlement to a Hedera Consensus Service topic you own, so earnings can be audited without trusting us")
+	cmd.Flags().Bool("enable-escrow", false,
+		"sell interactive time through the escrow contract, so a renter who stops early is refunded (implies --enable-hcs machinery)")
+	cmd.Flags().String("escrow-contract", "",
+		"SessionEscrow contract id or EVM address (required with --enable-escrow)")
+	cmd.Flags().String("identity-contract", "",
+		"IdentityRegistry contract for `cleargate-node register`")
+	cmd.Flags().Bool("self-settle", false,
+		"close expired sessions on-chain yourself instead of waiting for the renter to do it")
 	cmd.Flags().Bool("force", false, "overwrite an existing config")
 	return cmd
 }
@@ -76,6 +95,12 @@ type setupOptions struct {
 	leases      bool
 	leasePrice  string
 	tunnelMode  string
+
+	hcs              bool
+	escrow           bool
+	escrowContract   string
+	identityContract string
+	selfSettle       bool
 }
 
 func setup(ctx context.Context, opts setupOptions) error {
@@ -95,6 +120,24 @@ func setup(ctx context.Context, opts setupOptions) error {
 	}
 	if opts.tunnelMode != "" {
 		cfg.Leases.Tunnel.Mode = strings.TrimSpace(opts.tunnelMode)
+	}
+
+	// Escrow needs the sidecar to verify deposits and, optionally, to settle;
+	// HCS needs it to publish. Either implies the Hedera block is on, so a
+	// provider does not have to know that and pass a third flag.
+	cfg.Hedera.Enabled = opts.hcs || opts.escrow
+	cfg.HCS.Enabled = opts.hcs
+	cfg.Identity.RegistryContractID = strings.TrimSpace(opts.identityContract)
+	if opts.escrow {
+		cfg.Leases.PaymentMode = config.PaymentEscrow
+		cfg.Leases.EscrowContractID = strings.TrimSpace(opts.escrowContract)
+		cfg.Leases.SelfSettle = opts.selfSettle
+		if cfg.Leases.EscrowContractID == "" {
+			return errors.New("--enable-escrow needs --escrow-contract naming the deployed SessionEscrow")
+		}
+		if !cfg.Leases.Enabled {
+			return errors.New("--enable-escrow only applies to interactive time; pass --enable-leases too")
+		}
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -142,8 +185,9 @@ func setup(ctx context.Context, opts setupOptions) error {
 	configDir := filepath.Dir(path)
 	cfg.Leases.CAKeyPath = filepath.Join(configDir, "lease-ca")
 	cfg.Leases.Tunnel.ConfigDir = filepath.Join(configDir, "cloudflared")
+	cfg.Hedera.OperatorKeyPath = filepath.Join(configDir, "hedera-operator")
 
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateForSetup(); err != nil {
 		return err
 	}
 
@@ -185,6 +229,16 @@ func setup(ctx context.Context, opts setupOptions) error {
 		}
 	}
 
+	if cfg.Hedera.Enabled {
+		funded, err := preflightHedera(ctx, &cfg)
+		if err != nil {
+			return err
+		}
+		if !funded {
+			return nil
+		}
+	}
+
 	// A registry that is unreachable is worth knowing about now, while the
 	// provider is still watching, rather than as a node that quietly never
 	// appears on the website. It is not fatal: the node sells jobs regardless.
@@ -197,6 +251,9 @@ func setup(ctx context.Context, opts setupOptions) error {
 		}
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
@@ -358,4 +415,91 @@ func newRegistryToken() string {
 	var raw [32]byte
 	_, _ = rand.Read(raw[:])
 	return hex.EncodeToString(raw[:])
+}
+
+// preflightHedera creates the node's operator key and audit topic.
+//
+// Mirrors preflightLeases, and for the same reason: everything that can fail
+// should fail here, while a provider is watching and can act on it, rather than
+// in the middle of someone else's paid session.
+//
+// This is the first and only place ClearGate writes key material to a
+// provider's disk. It is worth being clear about what that key is and is not:
+// it pays its own fees and signs topic messages and contract calls, and it is
+// NOT pay_to. Earnings accumulate in pay_to, which still signs nothing, so a
+// compromise of this key costs the HBAR sitting in it and nothing else.
+func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
+	sidecar := newSidecar(*cfg)
+	if err := sidecar.Available(); err != nil {
+		return false, fmt.Errorf("  hedera: %w", err)
+	}
+
+	keyCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	key, err := sidecar.EnsureKey(keyCtx)
+	cancel()
+	if err != nil {
+		return false, fmt.Errorf("  hedera: %w", err)
+	}
+
+	fmt.Printf("  operator     %s\n", cfg.Hedera.OperatorKeyPath)
+	fmt.Printf("               %s\n", key.EVMAddress)
+
+	if !key.Funded {
+		// Not an error. An ECDSA key has an address from the moment it is
+		// generated, but no Hedera account exists until someone sends HBAR to
+		// it — so "unfunded" is a step the provider has not taken yet, not a
+		// failure of setup.
+		fmt.Printf("               no account yet — send a few HBAR to that address to create it\n")
+		fmt.Printf("               (https://portal.hedera.com on testnet), then re-run setup\n")
+		return false, nil
+	}
+
+	cfg.Hedera.OperatorAccountID = key.AccountID
+	fmt.Printf("               %s, balance %s tinybars\n", key.AccountID, key.BalanceTinybars)
+
+	// Escrow pays out to pay_to through a contract, and two things can make
+	// that impossible. Both are checked now, because discovering either at
+	// payout time would mean a session that cannot be closed normally.
+	if cfg.Leases.PaymentMode == config.PaymentEscrow {
+		accountCtx, cancelAccount := context.WithTimeout(ctx, 30*time.Second)
+		account, err := sidecar.AccountInfo(accountCtx, cfg.PayTo)
+		cancelAccount()
+		if err != nil {
+			return false, fmt.Errorf("  escrow: could not check pay_to %s: %w", cfg.PayTo, err)
+		}
+		if !account.Found {
+			return false, fmt.Errorf("  escrow: pay_to %s does not exist on %s", cfg.PayTo, cfg.Network)
+		}
+		if account.EVMAddress == "" {
+			return false, fmt.Errorf(
+				"  escrow: pay_to %s has no EVM address, so the contract cannot pay it — "+
+					"use an ECDSA account for escrow mode", cfg.PayTo)
+		}
+		if account.ReceiverSigRequired {
+			return false, fmt.Errorf(
+				"  escrow: pay_to %s has receiverSigRequired set, so a contract cannot pay it — "+
+					"clear that flag or use a different pay_to", cfg.PayTo)
+		}
+		fmt.Printf("  escrow       %s\n", cfg.Leases.EscrowContractID)
+		fmt.Printf("               pays %s (%s)\n", account.EVMAddress, cfg.PayTo)
+	}
+
+	if cfg.HCS.Enabled && cfg.HCS.TopicID == "" {
+		topicCtx, cancelTopic := context.WithTimeout(ctx, 60*time.Second)
+		topicID, err := sidecar.CreateTopic(topicCtx, "ClearGate node "+cfg.NodeID)
+		cancelTopic()
+		if err != nil {
+			return false, fmt.Errorf("  hcs: could not create the audit topic: %w", err)
+		}
+		cfg.HCS.TopicID = topicID
+	}
+	if cfg.HCS.Enabled {
+		fmt.Printf("  audit topic  %s\n", cfg.HCS.TopicID)
+		// Printed so the provider has it recorded somewhere other than the
+		// config file this command just wrote — it is the address of their own
+		// earnings history, and it cannot be recreated.
+		fmt.Printf("               https://hashscan.io/testnet/topic/%s\n", cfg.HCS.TopicID)
+	}
+
+	return true, nil
 }
