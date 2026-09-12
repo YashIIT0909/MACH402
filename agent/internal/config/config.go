@@ -250,10 +250,31 @@ type Leases struct {
 	// never leased out indefinitely by a renter who keeps topping it up.
 	MaxTotalMinutes int `yaml:"max_total_minutes"`
 
-	// MissedExtensions is how many slices may lapse past expires_at before the
-	// container is frozen. Freezing rather than killing is deliberate: a renter
-	// mid-task who is slow to pay should not lose their work outright.
+	// MissedExtensions is retained so configs written before OverrunSeconds
+	// existed still load. It no longer decides anything.
+	//
+	// It used to set the freeze tolerance to missed_extensions x the slice the
+	// renter bought, which with the shipped default of 2 meant a 60-minute
+	// lease kept the machine for 180 minutes before it was even frozen, and 190
+	// before the container died. That is three times the time sold, given away,
+	// and it read to a provider as the node ignoring its own expiry. See
+	// OverrunSeconds.
 	MissedExtensions int `yaml:"missed_extensions"`
+
+	// OverrunSeconds is how far past expires_at a lease keeps running before it
+	// is frozen.
+	//
+	// Small on purpose. Minutes bought should be minutes delivered: a renter who
+	// buys fifteen gets fifteen, and the provider's machine comes back. The
+	// tolerance exists only to absorb an extension that is paid for but not yet
+	// applied — a wallet prompt the renter is mid-way through approving — not to
+	// hand out free time.
+	//
+	// Freezing rather than killing is still deliberate, and unchanged: the
+	// container is paused, not destroyed, so a renter mid-task who is slow to
+	// pay gets their work back when they extend. GraceMinutes is how long that
+	// frozen state survives before the machine is reclaimed for good.
+	OverrunSeconds int `yaml:"overrun_seconds"`
 
 	// GraceMinutes is how long a frozen lease survives before it is reaped —
 	// container killed, tunnel ingress withdrawn, workspace wiped.
@@ -457,6 +478,7 @@ func DefaultLeases() Leases {
 		MaxMinutes:             120,
 		MaxTotalMinutes:        1440, // one day
 		MissedExtensions:       2,
+		OverrunSeconds:         30,
 		GraceMinutes:           10,
 		CAKeyPath:              "lease-ca",
 		Limits: LeaseLimits{
@@ -574,6 +596,12 @@ func (l *Leases) applyDefaults(configDir string) {
 	}
 	if l.MissedExtensions <= 0 {
 		l.MissedExtensions = fallback.MissedExtensions
+	}
+	// A config written before this existed has it at zero, which would freeze a
+	// renter the instant their clock ran out with no room for an in-flight
+	// extension. Treat absent as unset, not as "no tolerance at all".
+	if l.OverrunSeconds <= 0 {
+		l.OverrunSeconds = fallback.OverrunSeconds
 	}
 	if l.GraceMinutes <= 0 {
 		l.GraceMinutes = fallback.GraceMinutes

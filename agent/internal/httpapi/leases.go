@@ -397,7 +397,7 @@ func (s *Server) sweepLeases(ctx context.Context) {
 	leases := s.cfg.Leases
 	switch lease.Status() {
 	case runner.LeaseActive:
-		if lease.OverdueBy() < s.freezeTolerance(lease) {
+		if lease.OverdueBy() < s.freezeTolerance(lease.SessionID()) {
 			return
 		}
 		if err := s.runner.PauseLease(ctx, lease); err != nil {
@@ -425,25 +425,35 @@ func (s *Server) sweepLeases(ctx context.Context) {
 
 // freezeTolerance is how far past expiry a container runs before it is frozen.
 //
-// The two payment models need different answers, because "overdue" means
-// different things:
+// Small and fixed, for both payment models, and the reason is the same in each:
+// the minutes a renter bought are the minutes they get. The tolerance exists
+// only to absorb a payment that is already in flight — a wallet prompt being
+// approved, or a contract top-up that consensus has accepted but the mirror
+// node has not yet served — never to hand out free time.
 //
-//   - A direct-paid lease is overdue when the renter has not bought the next
-//     slice, so the tolerance scales with the slice they were buying: someone
-//     purchasing an hour at a time should not be frozen for being a minute
-//     late.
+//   - A direct-paid lease is overdue the moment expires_at passes. It used to
+//     be given missed_extensions x the slice it bought, which with the shipped
+//     default meant a 60-minute lease held the machine for 180 minutes before
+//     it was even frozen. That is not a tolerance, it is three times the
+//     product sold, and it read to a provider as their node ignoring its own
+//     expiry.
 //   - An escrow session is overdue the moment the clock passes what the
 //     CONTRACT says was paid for. There is no slice to be late on, and running
 //     past that point is time the contract will never pay the provider for —
-//     `elapsed` is capped at the paid duration. So the tolerance is small and
-//     fixed, just enough to absorb a top-up that is confirmed but not yet
-//     visible to the node.
-func (s *Server) freezeTolerance(lease *runner.Lease) time.Duration {
-	if lease.SessionID() != "" {
+//     `elapsed` is capped at the paid duration.
+//
+// Freezing rather than killing is unchanged and still deliberate: the container
+// is paused, so a renter who extends gets their work back exactly as it was.
+// leases.grace_minutes is how long that frozen state survives before the
+// machine is reclaimed for good.
+// Takes the session id rather than the lease because that is all it reads, and
+// a pure function of configuration is one a test can pin without standing up a
+// container.
+func (s *Server) freezeTolerance(sessionID string) time.Duration {
+	if sessionID != "" {
 		return sessionFreezeGrace
 	}
-	slice := time.Duration(lease.SliceMinutes()) * time.Minute
-	return time.Duration(s.cfg.Leases.MissedExtensions) * slice
+	return time.Duration(s.cfg.Leases.OverrunSeconds) * time.Second
 }
 
 // sessionFreezeGrace covers mirror-node lag on a top-up: the renter's money is
