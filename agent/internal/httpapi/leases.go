@@ -386,12 +386,20 @@ func (s *Server) sweepLeases(ctx context.Context) {
 		return
 	}
 	if lease.Status().IsTerminal() {
-		// A session that ended some other way may still have its deposit in the
-		// contract. Same loop, because it is the same event — the session is
-		// over — and a second scheduler for it would be one more thing to keep
-		// in agreement with this one.
+		// A session that ended some other way may still owe its renter the
+		// credit they did not burn. Same loop, because it is the same event —
+		// the session is over — and a second scheduler for it would be one more
+		// thing to keep in agreement with this one. It is also the retry for a
+		// refund whose transfer failed: settleSession leaves those pending.
 		s.settleSession(ctx, lease)
 		return
+	}
+
+	// The meter, before the freeze decision rather than after it. Burning is
+	// what moves expiry on a session, so a tick that runs afterwards would
+	// always be judging the state of affairs one sweep ago.
+	if lease.SessionID() != "" && lease.Status() == runner.LeaseActive {
+		s.tickMeter(lease)
 	}
 
 	leases := s.cfg.Leases
@@ -414,11 +422,11 @@ func (s *Server) sweepLeases(ctx context.Context) {
 		// Settled with the lease we already hold, NOT by looking it up again:
 		// StopLease releases the node's single lease slot, so by this point
 		// ActiveLease no longer returns it and a re-lookup would silently find
-		// nothing and settle nothing.
+		// nothing and settle nothing — leaving a renter's refund unpaid.
 		//
-		// An expired session's deposit is by now entirely the provider's —
-		// elapsed has reached the paid duration, so there is nothing to refund —
-		// but it stays in the contract until somebody calls settle.
+		// A session reaped this way has usually burned its credit to zero, so
+		// there is nothing left to return. Usually is not always: a renter who
+		// stopped paying with credit still on the clock is refunded here.
 		s.settleSession(ctx, lease)
 	}
 }
@@ -437,10 +445,10 @@ func (s *Server) sweepLeases(ctx context.Context) {
 //     it was even frozen. That is not a tolerance, it is three times the
 //     product sold, and it read to a provider as their node ignoring its own
 //     expiry.
-//   - An escrow session is overdue the moment the clock passes what the
-//     CONTRACT says was paid for. There is no slice to be late on, and running
-//     past that point is time the contract will never pay the provider for —
-//     `elapsed` is capped at the paid duration.
+//   - A metered session is overdue the moment its credit reaches zero. There
+//     is no slice to be late on, and running past that point is time nobody is
+//     paying the provider for — the meter cannot charge a credit that is
+//     already empty.
 //
 // Freezing rather than killing is unchanged and still deliberate: the container
 // is paused, so a renter who extends gets their work back exactly as it was.
@@ -456,9 +464,10 @@ func (s *Server) freezeTolerance(sessionID string) time.Duration {
 	return time.Duration(s.cfg.Leases.OverrunSeconds) * time.Second
 }
 
-// sessionFreezeGrace covers mirror-node lag on a top-up: the renter's money is
-// already on consensus, and freezing them for the seconds it takes the node to
-// see it would be punishing them for our own read latency.
+// sessionFreezeGrace covers a top-up already in flight: the payment round trip
+// through the facilitator takes a couple of seconds, and the meter ticks every
+// fifteen, so freezing the instant credit hit zero would freeze renters whose
+// money was already moving.
 const sessionFreezeGrace = 30 * time.Second
 
 // leasePrice multiplies the per-minute price by the minutes bought.

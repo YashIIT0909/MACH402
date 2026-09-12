@@ -36,15 +36,15 @@ func TestFreezeToleranceDoesNotScaleWithTheSliceBought(t *testing.T) {
 	}
 }
 
-// An escrow session keeps its own, separate tolerance: it is overdue the moment
-// the clock passes what the contract was paid for, and the only slack it needs
-// is for mirror-node ingestion lag on a top-up.
-func TestEscrowSessionKeepsItsOwnTolerance(t *testing.T) {
+// A metered session keeps its own, separate tolerance: it is overdue the moment
+// its credit reaches zero, and the only slack it needs is for a top-up payment
+// already in flight through the facilitator.
+func TestMeteredSessionKeepsItsOwnTolerance(t *testing.T) {
 	server := &Server{cfg: config.Config{Leases: config.Leases{OverrunSeconds: 300}}}
 
 	if got := server.freezeTolerance("sess_abc"); got != sessionFreezeGrace {
 		t.Errorf("session tolerance = %s, want %s — a provider's overrun_seconds must not "+
-			"extend time the contract will never pay for", got, sessionFreezeGrace)
+			"extend time no credit is paying for", got, sessionFreezeGrace)
 	}
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -245,5 +246,51 @@ func TestLeasePathsResolveAgainstTheConfigDirectory(t *testing.T) {
 	absolute.applyDefaults("/etc/cleargate")
 	if absolute.CAKeyPath != "/var/lib/cleargate/ca" {
 		t.Fatalf("an absolute ca_key_path should be left alone, got %q", absolute.CAKeyPath)
+	}
+}
+
+// A config written for the escrow flow still loads, and now means the metered
+// one.
+//
+// The two are genuinely different mechanisms — a deposit into a contract the
+// node verified by reading the mirror node, versus a chunk paid through the
+// facilitator that the node meters and refunds — but they sell a provider the
+// same thing: interactive time where a renter who stops early gets the rest
+// back. Failing to start on the old spelling would take a working node offline
+// over a rename.
+func TestEscrowPaymentModeStillLoadsAndMeansSession(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	older := "" +
+		"node_id: node_test\n" +
+		"pay_to: \"0.0.1234\"\n" +
+		"price_tinybars: \"100000\"\n" +
+		"hedera:\n" +
+		"  enabled: true\n" +
+		"leases:\n" +
+		"  enabled: true\n" +
+		"  payment_mode: escrow\n" +
+		"  escrow_contract_id: \"0.0.5555\"\n"
+
+	if err := os.WriteFile(path, []byte(older), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load a config written for the escrow flow: %v", err)
+	}
+	if cfg.Leases.PaymentMode != PaymentSession {
+		t.Errorf("payment_mode = %q, want %q — the old spelling must normalize rather than "+
+			"leave two names for one mode", cfg.Leases.PaymentMode, PaymentSession)
+	}
+	if cfg.Leases.SessionChunkSeconds <= 0 {
+		t.Error("session_chunk_seconds is unset, so a chunk would buy no time at all")
+	}
+	if cfg.Leases.LowCreditThresholdSeconds >= cfg.Leases.SessionChunkSeconds {
+		t.Errorf("low_credit_threshold_seconds (%d) is not below session_chunk_seconds (%d), "+
+			"so every session would open already low on credit",
+			cfg.Leases.LowCreditThresholdSeconds, cfg.Leases.SessionChunkSeconds)
 	}
 }

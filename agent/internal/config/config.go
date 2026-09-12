@@ -299,41 +299,69 @@ type Leases struct {
 	//
 	// "direct" is the original flow: a forward transfer per slice through the
 	// facilitator, no refunds, which is what every existing node does.
-	// "escrow" routes payment through the SessionEscrow contract instead, so a
-	// renter who stops early gets their unused time back.
+	// "session" buys a credit the same x402 way and then meters it down second
+	// by second, refunding whatever is left when the session ends.
 	//
 	// Added behind a flag rather than replacing direct, per the project's rule
 	// about preferring a config flag over changing working behaviour: every
 	// tagged milestone has to stay demoable, and `make smoke` exercises direct.
+	//
+	// "escrow" is accepted as the old spelling of "session" and normalizes to
+	// it at load. It named a genuinely different mechanism — a deposit into
+	// SessionEscrow, verified by reading the mirror node — and a node that used
+	// it now meters and refunds instead. The contract itself is still in the
+	// repo; see the note in the README about payment_mode: escrow-vault.
 	PaymentMode string `yaml:"payment_mode"`
 
-	// EscrowContractID is the SessionEscrow deployment, as a contract id or EVM
-	// address. Public configuration, not a secret.
+	// EscrowContractID is retained so configs written for the escrow flow still
+	// load. Nothing reads it on the metered path.
 	EscrowContractID string `yaml:"escrow_contract_id"`
 
-	// PriceTinybarsPerSecond is the rate the contract settles at. Left empty it
-	// is derived from PriceTinybarsPerMinute, rounding up.
+	// PriceTinybarsPerSecond is the rate a session's credit burns at. Left
+	// empty it is derived from PriceTinybarsPerMinute, rounding up.
 	//
-	// The contract multiplies this by elapsed seconds, so once a session opens
+	// The meter multiplies this by elapsed seconds, so once a session opens
 	// this is the only price that matters — which is why the node converts once
 	// at quote time and treats the per-second figure as authoritative from then
 	// on, rather than converting in two places that could disagree.
 	PriceTinybarsPerSecond string `yaml:"price_tinybars_per_second"`
 
-	// SelfSettle lets the node close an expired session itself, through the
-	// sidecar, instead of waiting for the renter to do it.
+	// SessionChunkSeconds is the most time one session payment ever buys.
 	//
-	// Off by default so the baseline story stays "the node needs no key at all".
-	// Turning it on grants no power worth worrying about: settle is
-	// permissionless at the contract and calling it early only ever pays the
-	// caller's own side LESS. What it buys is that a provider still gets paid
-	// when a renter force-quits and never calls settle themselves.
+	// It is the bound on the whole trust gap this mode has: between paying for
+	// a chunk and the refund at the end, the provider is holding the renter's
+	// money. Capping the chunk caps how much that can ever be, regardless of
+	// how long a session the renter asked for — they get a chunk now and top up
+	// as they go, and each top-up is independently small.
+	SessionChunkSeconds int `yaml:"session_chunk_seconds"`
+
+	// LowCreditThresholdSeconds is when a session starts telling its renter to
+	// top up. Reported as `low_credits` on the session state, so the threshold
+	// lives on the node that knows its own sweep interval rather than being
+	// guessed at by every client.
+	LowCreditThresholdSeconds int `yaml:"low_credit_threshold_seconds"`
+
+	// SelfSettle lets the node transfer a session's unburned remainder back to
+	// its renter itself, through the sidecar, when the session ends.
+	//
+	// Off by default, and with a real cost when it is on: refunds are paid from
+	// the node's operator account, so that account has to hold more than the
+	// fee float a node needs for HCS and registration — enough to cover an
+	// outstanding chunk. Earnings still land in pay_to, which signs nothing, so
+	// a compromise of the operator key still cannot touch them.
+	//
+	// With it off, the node publishes what it owes to its audit topic and logs
+	// it, and the refund is a thing the provider settles by hand.
 	SelfSettle bool `yaml:"self_settle"`
 }
 
 // Lease payment modes. See Leases.PaymentMode.
 const (
-	PaymentDirect = "direct"
+	PaymentDirect  = "direct"
+	PaymentSession = "session"
+
+	// PaymentEscrow is the old spelling of PaymentSession, normalized at load
+	// so a config written against the escrow flow still starts.
 	PaymentEscrow = "escrow"
 )
 
@@ -510,9 +538,19 @@ func DefaultLeases() Leases {
 			Mode:   TunnelQuick,
 			Binary: "cloudflared",
 		},
-		// Direct, not escrow: escrow needs a deployed contract and a funded
-		// operator key, neither of which a node has until someone opts in.
+		// Direct, not session: metered sessions need a funded operator key to
+		// pay refunds from, which a node does not have until someone opts in.
 		PaymentMode: PaymentDirect,
+
+		// Five minutes. Long enough that a renter is not paying every few
+		// seconds, short enough that the money a provider is holding ahead of
+		// the compute is a few tenths of a cent rather than an hour's rental.
+		SessionChunkSeconds: 300,
+
+		// A minute of runway. The meter ticks every 15s and a payment round
+		// trip is a couple of seconds, so this leaves several chances to top up
+		// before the credit hits zero and the container freezes.
+		LowCreditThresholdSeconds: 60,
 	}
 }
 
@@ -638,6 +676,19 @@ func (l *Leases) applyDefaults(configDir string) {
 	}
 	if l.PaymentMode == "" {
 		l.PaymentMode = fallback.PaymentMode
+	}
+	// The escrow flow's name, kept loadable. A node that opted into refundable
+	// interactive time still gets refundable interactive time; what changed
+	// underneath is that the refund comes from the provider against a published
+	// running balance instead of from a contract.
+	if l.PaymentMode == PaymentEscrow {
+		l.PaymentMode = PaymentSession
+	}
+	if l.SessionChunkSeconds <= 0 {
+		l.SessionChunkSeconds = fallback.SessionChunkSeconds
+	}
+	if l.LowCreditThresholdSeconds <= 0 {
+		l.LowCreditThresholdSeconds = fallback.LowCreditThresholdSeconds
 	}
 
 	if configDir == "" {
@@ -769,12 +820,14 @@ func (c Config) validateBase() error {
 	if err := c.Identity.validate(); err != nil {
 		return err
 	}
-	// Escrow verification is a mirror-node read and self-settle is a sidecar
-	// call, so escrow mode cannot work without the hedera block turned on.
-	// Catching it here means a provider finds out at startup rather than when a
-	// renter's deposit cannot be checked.
-	if c.Leases.Enabled && c.Leases.PaymentMode == PaymentEscrow && !c.Hedera.Enabled {
-		return errors.New("leases.payment_mode is escrow, which needs hedera.enabled — re-run `cleargate-node setup --enable-escrow`")
+	// A metered session's whole claim to being trustworthy is the running
+	// "owed if you stopped now" figure on the provider's audit topic, and
+	// publishing that is a sidecar call. A session node with no key would be
+	// asking renters to prepay against nothing but a promise, so this is
+	// refused at startup rather than discovered by a renter.
+	if c.Leases.Enabled && c.Leases.PaymentMode == PaymentSession && !c.Hedera.Enabled {
+		return errors.New("leases.payment_mode is session, which needs hedera.enabled so the node can publish " +
+			"its refund-owed trail — re-run `cleargate-node setup --enable-sessions`")
 	}
 	return nil
 }
@@ -812,14 +865,27 @@ func (l Leases) validate() error {
 	}
 	switch l.PaymentMode {
 	case PaymentDirect:
-	case PaymentEscrow:
-		// Escrow mode with no contract would 402 every renter into depositing
-		// nowhere, so this is refused at load rather than at the first sale.
-		if l.EscrowContractID == "" {
-			return errors.New("leases.payment_mode is escrow, so leases.escrow_contract_id must name the deployed SessionEscrow")
+	case PaymentSession:
+		// A chunk longer than one slice would sell more time in one payment
+		// than the node offers in one lease, which is exactly the exposure
+		// chunking exists to bound.
+		// The chunk is also what the container is provisioned for, so it has to
+		// sit inside the same bounds a lease slice does.
+		if l.SessionChunkSeconds < l.MinMinutes*60 {
+			return fmt.Errorf("leases.session_chunk_seconds (%d) must be at least leases.min_minutes (%d minutes)",
+				l.SessionChunkSeconds, l.MinMinutes)
+		}
+		if l.SessionChunkSeconds > l.MaxMinutes*60 {
+			return fmt.Errorf("leases.session_chunk_seconds (%d) must not exceed leases.max_minutes (%d minutes)",
+				l.SessionChunkSeconds, l.MaxMinutes)
+		}
+		if l.LowCreditThresholdSeconds >= l.SessionChunkSeconds {
+			return fmt.Errorf("leases.low_credit_threshold_seconds (%d) must be less than leases.session_chunk_seconds (%d), "+
+				"or every session would be low on credit the moment it opened",
+				l.LowCreditThresholdSeconds, l.SessionChunkSeconds)
 		}
 	default:
-		return fmt.Errorf("leases.payment_mode %q must be %q or %q", l.PaymentMode, PaymentDirect, PaymentEscrow)
+		return fmt.Errorf("leases.payment_mode %q must be %q or %q", l.PaymentMode, PaymentDirect, PaymentSession)
 	}
 	if l.PriceTinybarsPerSecond != "" {
 		if _, err := strconv.ParseUint(l.PriceTinybarsPerSecond, 10, 64); err != nil {

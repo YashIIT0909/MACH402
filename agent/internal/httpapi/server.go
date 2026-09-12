@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
 	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
 	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
 	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
@@ -43,20 +42,24 @@ type Server struct {
 	ca     *sshca.CA
 	tunnel *tunnel.Manager
 
-	// audit publishes settlements to the provider's own HCS topic. nil unless
-	// they opted in, and every call site publishes unconditionally — a nil
-	// publisher is a no-op, so the settlement paths do not sprout enabled
-	// checks.
-	audit *hcs.Publisher
+	// audit publishes settlements and the running refund-owed trail to the
+	// provider's own HCS topic. Every call site publishes unconditionally — a
+	// node that never opted in holds a no-op publisher, so the settlement paths
+	// do not sprout enabled checks.
+	//
+	// An interface rather than *hcs.Publisher because what is published is now
+	// load-bearing rather than bookkeeping: the burn checkpoints are the whole
+	// reason a renter can trust a metered session, so the tests have to be able
+	// to read what actually went onto the topic.
+	audit auditPublisher
 
-	// escrow verifies deposits by reading the mirror node. nil unless this node
-	// sells sessions rather than direct-paid leases. It holds no key: verifying
-	// a contract call needs only public data (CLAUDE.md invariant 1).
-	escrow *escrow.Verifier
-	// providerAddress is pay_to as an EVM address, resolved once at startup.
-	// Read from the mirror node, never derived — see escrow.ResolveProviderAddress.
-	providerAddress string
-	// sidecar is present only when leases.self_settle is on.
+	// sessions is true when this node sells metered, refundable interactive
+	// time rather than direct-paid leases (leases.payment_mode: session). The
+	// /v1/sessions routes answer 404 without it.
+	sessions bool
+	// sidecar pays session refunds, and is present only when
+	// leases.self_settle is on. A nil sidecar means the node meters and
+	// publishes what it owes but cannot return it itself.
 	sidecar *hedera.Sidecar
 
 	// paused stops the node selling new jobs without stopping the ones already
@@ -77,6 +80,14 @@ func New(cfg config.Config, run *runner.Runner, fac *x402.Facilitator, log *slog
 	}
 }
 
+// auditPublisher is what the settlement paths write their record to.
+//
+// Satisfied by *hcs.Publisher, including a nil one — Publish guards its own
+// receiver, so a node that never opted into HCS holds a working no-op.
+type auditPublisher interface {
+	Publish(hcs.AuditMessage)
+}
+
 // EnableAudit attaches the provider's HCS publisher.
 //
 // Separate from New for the same reason EnableLeases is: publishing needs a key
@@ -85,15 +96,14 @@ func (s *Server) EnableAudit(publisher *hcs.Publisher) {
 	s.audit = publisher
 }
 
-// EnableEscrow attaches everything the session payment path needs.
+// EnableSessions turns on metered, refundable interactive time.
 //
-// providerAddress is pay_to in EVM form, resolved from the mirror node at
-// startup so a misconfigured account fails loudly there rather than when a
-// renter's money is already in the contract. sidecar may be nil, which simply
-// means the node will not settle expired sessions itself.
-func (s *Server) EnableEscrow(verifier *escrow.Verifier, providerAddress string, sidecar *hedera.Sidecar) {
-	s.escrow = verifier
-	s.providerAddress = providerAddress
+// sidecar may be nil, which means the node meters and publishes what it owes
+// but cannot pay a refund itself — leases.self_settle off. That is a weaker
+// offer, not a broken one, and it is the caller's choice to make rather than
+// something this silently upgrades.
+func (s *Server) EnableSessions(sidecar *hedera.Sidecar) {
+	s.sessions = true
 	s.sidecar = sidecar
 }
 
@@ -103,6 +113,9 @@ func (s *Server) EnableEscrow(verifier *escrow.Verifier, providerAddress string,
 // publisher and this does nothing. It never returns an error, because a failed
 // publish must not fail a paid request — see hcs.Publisher.Publish.
 func (s *Server) publishAudit(msg hcs.AuditMessage) {
+	if s.audit == nil {
+		return
+	}
 	s.audit.Publish(msg)
 }
 
@@ -167,9 +180,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/leases/{id}", s.handleLeaseState)
 	mux.HandleFunc("POST /v1/leases/{id}/stop", s.handleLeaseStop)
 
-	// escrow-gated. Payment is a deposit the renter already made at the
-	// contract, proved with a transaction id, so these answer 402 with a quote
-	// rather than an x402 challenge — there is no transfer for anyone to sign.
+	// x402-gated, and metered rather than forward-paid: each payment buys a
+	// chunk of credit the node burns down second by second and refunds the
+	// remainder of. The top-up is additionally session-token-gated, because it
+	// has to name the session it is crediting.
 	mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /v1/sessions/{id}/topup", s.handleTopUpSession)
 

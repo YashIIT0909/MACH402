@@ -79,16 +79,21 @@ type LeaseOffer struct {
 	// that cannot reach the index they need is not the lease they wanted.
 	EgressAllowlist []string `json:"egress_allowlist"`
 
-	// EscrowContract is set only on a node selling refundable sessions, and its
-	// absence is meaningful: it tells a renter this node's interactive time is
-	// forward-paid and not refundable if they stop early. A client picks which
-	// flow to use from this field rather than by trying one and seeing.
-	EscrowContract string `json:"escrow_contract,omitempty"`
+	// PaymentMode is how this node's interactive time is paid for: "direct" is
+	// forward payment per slice and is not refundable, "session" is a metered
+	// credit whose unburned remainder comes back. A client picks which flow to
+	// use from this field rather than by trying one and seeing.
+	PaymentMode string `json:"payment_mode,omitempty"`
 
-	// PriceTinybarsPerSecond is the rate the contract settles at. Per second
-	// rather than per minute because that is the granularity a refund is
+	// PriceTinybarsPerSecond is the rate a session's credit burns at. Per
+	// second rather than per minute because that is the granularity a refund is
 	// computed at, which is the entire reason to choose this flow.
 	PriceTinybarsPerSecond string `json:"price_tinybars_per_second,omitempty"`
+
+	// ChunkSeconds is the most time one session payment ever buys, and so the
+	// bound on how much of a renter's money the provider is ever holding ahead
+	// of the compute it pays for.
+	ChunkSeconds int `json:"chunk_seconds,omitempty"`
 }
 
 // GPU is what this node can actually pass through to a container. Model and
@@ -152,9 +157,10 @@ func Build(cfg config.Config, version, feePayer string, detected runner.GPU, lea
 			WorkspaceGB:     cfg.Leases.Limits.WorkspaceGB,
 			EgressAllowlist: cfg.Leases.Egress.Allowlist,
 		}
-		if cfg.Leases.PaymentMode == config.PaymentEscrow {
-			leases.EscrowContract = cfg.Leases.EscrowContractID
+		leases.PaymentMode = cfg.Leases.PaymentMode
+		if cfg.Leases.PaymentMode == config.PaymentSession {
 			leases.PriceTinybarsPerSecond = sessionPrice(cfg.Leases)
+			leases.ChunkSeconds = cfg.Leases.SessionChunkSeconds
 		}
 	}
 

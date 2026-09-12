@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -118,39 +119,61 @@ type Lease struct {
 	pausedAt     *time.Time
 	err          string
 
-	// Escrow fields, set only on a lease sold as a session
-	// (leases.payment_mode: escrow). A session IS a lease — same container,
+	// Metering fields, set only on a lease sold as a session
+	// (leases.payment_mode: session). A session IS a lease — same container,
 	// same certificate, same freeze-and-reap — differing only in how it was
 	// paid for and therefore in what happens when it ends.
 	//
-	// sessionID is the contract's key; empty on a direct-paid lease, which is
+	// A direct lease buys TIME: expiresAt moves and nothing is owed back. A
+	// session buys CREDIT: a paid-up balance that the meter burns down second
+	// by second while the container is actually running, and whose remainder
+	// belongs to the renter the moment they stop.
+	//
+	// sessionID is the session's key; empty on a direct-paid lease, which is
 	// how the rest of the code tells the two apart.
 	sessionID string
-	// depositTx is the renter's openSession transaction, kept for the receipt
-	// and the audit trail.
-	depositTx string
-	// settleState tracks whether the on-chain split has happened yet. A reaped
-	// session that is still unsettled is money sitting in the contract that
-	// belongs to someone, so the sweep can act on it.
+	// payer is the Hedera account the facilitator confirmed paid for this
+	// session. It is where a refund goes, so it comes from the settlement
+	// rather than from anything the renter asserted in a request body.
+	payer string
+	// credit is unburned tinybars: exactly what the node owes back if the
+	// session stopped right now.
+	credit *big.Int
+	// burned is cumulative tinybars the provider has actually earned. Kept
+	// alongside credit rather than derived, so the audit trail can state both
+	// halves of the split without recomputing either.
+	burned *big.Int
+	// pricePerSecond is the rate credit burns at, fixed for the session's life
+	// at the price quoted when it opened.
+	pricePerSecond *big.Int
+	// lastTickAt is when the meter last ran. Elapsed time is measured from
+	// here, not from createdAt, so a paused stretch simply never gets charged.
+	lastTickAt time.Time
+	// exhausted records that the credit has already hit zero, so expiry is
+	// pinned at the moment it did rather than dragged forward by later ticks.
+	exhausted bool
+	// settleState tracks whether the remainder has been returned yet. A reaped
+	// session that is still pending is money the provider is holding that
+	// belongs to someone else, so the sweep can act on it.
 	settleState SettleState
-	// paidSeconds is the duration the CONTRACT says was bought, which is the
-	// only authority on it. Kept in seconds rather than derived from paidMinutes
-	// because a top-up is compared against it exactly: rounding to minutes would
-	// make a legitimate top-up look like no change at all.
-	paidSeconds int64
+	// refunded is what was actually paid back, set once by MarkSettled. Kept
+	// separately from credit, which MarkSettled zeroes: a caller asking "what
+	// did I get back" after the session ended needs this, not "what is owed
+	// right now" — which is correctly zero the instant it has been paid.
+	refunded *big.Int
 }
 
-// SettleState is where an escrow session stands with the contract.
+// SettleState is where a session stands with its renter's remaining credit.
 type SettleState string
 
 const (
-	// SettleNotApplicable is a direct-paid lease: settled at the facilitator
-	// the moment it started, with nothing on-chain left to close.
+	// SettleNotApplicable is a direct-paid lease: paid forward per slice, with
+	// nothing owed back and nothing to close.
 	SettleNotApplicable SettleState = ""
-	// SettlePending means the session is over and the contract still holds the
-	// deposit. Either party may close it; `settle` is permissionless.
+	// SettlePending means the session is over and the node still holds credit
+	// that belongs to the renter.
 	SettlePending SettleState = "pending"
-	// SettleDone means the split has been executed on-chain.
+	// SettleDone means the remainder has been returned, or there was none.
 	SettleDone SettleState = "done"
 )
 
@@ -192,25 +215,167 @@ func (l *Lease) State() LeaseState {
 	return state
 }
 
-// MarkEscrow records that this lease was paid for through the escrow contract.
+// MarkMetered turns this lease into a metered session.
 //
-// Called once, right after the deposit is verified. From here on the lease
-// behaves identically to a direct-paid one except at the end, where the
-// contract has a split to perform.
-func (l *Lease) MarkEscrow(sessionID, depositTx string, expiresAt time.Time, paidSeconds int64) {
+// Called once, right after the opening chunk settles at the facilitator. The
+// credit is exactly what the facilitator confirmed was paid — never a figure
+// recomputed from a price table, because the whole point of the refund trail is
+// that the number the node owes back is derived from money that actually moved.
+//
+// From here on the lease behaves identically to a direct-paid one except that
+// the meter, not the clock, decides when it runs out, and that the remainder
+// belongs to the renter when it ends.
+func (l *Lease) MarkMetered(sessionID, payer string, pricePerSecond, credit *big.Int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.sessionID = sessionID
-	l.depositTx = depositTx
+	l.payer = payer
+	l.pricePerSecond = new(big.Int).Set(pricePerSecond)
+	l.credit = new(big.Int).Set(credit)
+	l.burned = big.NewInt(0)
+	l.lastTickAt = time.Now()
 	l.settleState = SettlePending
-	l.paidSeconds = paidSeconds
-	// The on-chain record is authoritative about when the paid time ends: the
-	// contract computes the split from its own startTime, so a node clock that
-	// disagrees would freeze a container early or late.
-	l.expiresAt = expiresAt
+	l.syncExpiryLocked()
 }
 
-// SessionID is the escrow session backing this lease, or "" for a direct-paid
+// AddCredit banks another paid chunk. The session's expiry moves out by
+// whatever that credit buys at the rate fixed when it opened.
+//
+// The metered twin of ExtendLease, and deliberately additive rather than
+// absolute: a renter who tops up early keeps the runway they had left instead
+// of silently losing it.
+func (l *Lease) AddCredit(amount *big.Int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.credit == nil {
+		return
+	}
+	l.credit.Add(l.credit, amount)
+	l.syncExpiryLocked()
+}
+
+// Burn charges the session for the time since the last tick and reports what
+// it now owes.
+//
+// It is the only thing that moves money between the two halves of a session,
+// and it only ever runs while the container is actually running: a frozen
+// session has its clock reset by Thaw rather than charged for the freeze.
+//
+// Returns the tinybars just burned and the credit remaining. Credit is clamped
+// at zero — a session cannot go into debt, it freezes.
+func (l *Lease) Burn(now time.Time) (burned, remaining *big.Int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.credit == nil || l.pricePerSecond == nil {
+		return big.NewInt(0), big.NewInt(0)
+	}
+
+	elapsed := now.Sub(l.lastTickAt)
+	l.lastTickAt = now
+	if elapsed <= 0 {
+		return big.NewInt(0), new(big.Int).Set(l.credit)
+	}
+
+	// Truncated to whole seconds, so a burn is never charged for a fraction the
+	// renter's own arithmetic would not predict. The remainder is not lost: the
+	// next tick measures from lastTickAt, which moved by the full elapsed time.
+	charge := new(big.Int).Mul(l.pricePerSecond, big.NewInt(int64(elapsed.Seconds())))
+	if charge.Cmp(l.credit) > 0 {
+		charge = new(big.Int).Set(l.credit)
+	}
+	l.credit.Sub(l.credit, charge)
+	l.burned.Add(l.burned, charge)
+	l.syncExpiryLocked()
+
+	return charge, new(big.Int).Set(l.credit)
+}
+
+// syncExpiryLocked keeps expiresAt equal to what the credit buys.
+//
+// This is what lets metering reuse the freeze-and-reap sweep unchanged: the
+// sweep asks how far past expiry a lease is, and on a session that question
+// means "how long has the credit been at zero". Two schedulers for one event is
+// exactly what this codebase does not have.
+//
+// A no-op on a direct-paid lease, whose expiry is the time it bought and has
+// nothing to do with any credit. The caller holds l.mu.
+func (l *Lease) syncExpiryLocked() {
+	if l.pricePerSecond == nil || l.credit == nil {
+		return
+	}
+
+	if seconds := l.secondsRemainingLocked(); seconds > 0 {
+		l.exhausted = false
+		l.expiresAt = l.lastTickAt.Add(time.Duration(seconds) * time.Second)
+	} else if !l.exhausted {
+		// Credit has just run out. Pin expiry at that instant and leave it
+		// there: the sweep freezes on how far past expiry a lease is, and a
+		// zero-credit session that moved its own expiry forward on every tick
+		// would sit at "zero seconds overdue" for ever and never freeze.
+		l.exhausted = true
+		l.expiresAt = l.lastTickAt
+	}
+
+	// paidMinutes is what ValidateLeaseExtension and the lease state report.
+	// For a session it means "minutes bought in total", which is burned plus
+	// remaining, rounded up.
+	total := new(big.Int).Add(l.burned, l.credit)
+	if l.pricePerSecond.Sign() > 0 {
+		seconds := new(big.Int).Div(total, l.pricePerSecond).Int64()
+		l.paidMinutes = int((seconds + 59) / 60)
+	}
+}
+
+func (l *Lease) secondsRemainingLocked() int64 {
+	if l.credit == nil || l.pricePerSecond == nil || l.pricePerSecond.Sign() <= 0 {
+		return 0
+	}
+	return new(big.Int).Div(l.credit, l.pricePerSecond).Int64()
+}
+
+// SecondsRemaining is how much time the unburned credit still buys.
+//
+// The session's answer to "how long have I got", and computed from money rather
+// than read off a clock — which is what makes it agree with the refund figure
+// by construction instead of by two pieces of arithmetic happening to match.
+func (l *Lease) SecondsRemaining() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.secondsRemainingLocked()
+}
+
+// Credit is what the node owes back if the session stopped right now.
+func (l *Lease) Credit() *big.Int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.credit == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(l.credit)
+}
+
+// Burned is what the provider has earned so far on this session.
+func (l *Lease) Burned() *big.Int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.burned == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(l.burned)
+}
+
+// PricePerSecond is the rate this session's credit burns at.
+func (l *Lease) PricePerSecond() *big.Int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.pricePerSecond == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(l.pricePerSecond)
+}
+
+// SessionID is the metered session backing this lease, or "" for a direct-paid
 // lease. This is what distinguishes the two everywhere else in the code.
 func (l *Lease) SessionID() string {
 	l.mu.RLock()
@@ -218,54 +383,55 @@ func (l *Lease) SessionID() string {
 	return l.sessionID
 }
 
-// DepositTransaction is the renter's openSession transaction id.
-func (l *Lease) DepositTransaction() string {
+// Payer is the account that paid for this session, and therefore where its
+// refund goes. Taken from the facilitator's settlement, never from a request.
+func (l *Lease) Payer() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.depositTx
+	return l.payer
 }
 
-// SettleState reports whether the on-chain split still needs doing.
+// SettleState reports whether the remainder still needs returning.
 func (l *Lease) SettleState() SettleState {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.settleState
 }
 
-// MarkSettled records that the contract has performed the split.
+// Refunded is what was actually paid back to the renter, once settled — zero
+// beforehand and zero on a session that never had anything left to return.
 //
-// Idempotent, and it must be: `settle` is permissionless, so the renter's
-// clean-exit call and this node's self-settle can both succeed in either order
-// — the contract's one-shot guard sorts that out, and this only records what
-// already happened.
-func (l *Lease) MarkSettled() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.settleState != SettleNotApplicable {
-		l.settleState = SettleDone
-	}
-}
-
-// ExtendPaidUntil moves a session's expiry after a verified top-up.
-//
-// Unlike ExtendLease this takes an absolute time rather than minutes, because
-// the contract's `startTime + duration` is the authority on when a session ends
-// and the node mirrors it rather than recomputing it.
-func (l *Lease) ExtendPaidUntil(expiresAt time.Time, paidSeconds int64) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.expiresAt = expiresAt
-	l.paidSeconds = paidSeconds
-	l.paidMinutes = int((paidSeconds + 59) / 60)
-}
-
-// PaidSeconds is the duration the contract says was bought, in seconds.
-//
-// Zero on a direct-paid lease, which has no on-chain duration at all.
-func (l *Lease) PaidSeconds() int64 {
+// Distinct from Credit() on purpose. Credit answers "what is owed right now",
+// which is correctly zero the instant it has been paid out — but a caller
+// reading the session *after* it ends needs "what was paid out", and nothing
+// else on the lease remembers that once the credit itself is zeroed.
+func (l *Lease) Refunded() *big.Int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.paidSeconds
+	if l.refunded == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(l.refunded)
+}
+
+// MarkSettled records that `refunded` has been returned to the renter, and
+// zeroes the credit so nothing can be refunded twice.
+//
+// Idempotent, and it must be: a session can reach its end through the renter
+// stopping it and through the sweep reaping it, and both call the same path.
+// The amount is recorded even on the second call, so a settle that ran twice
+// for any reason still reports the real figure rather than the last caller's.
+func (l *Lease) MarkSettled(refunded *big.Int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.settleState == SettleNotApplicable {
+		return
+	}
+	l.settleState = SettleDone
+	l.refunded = new(big.Int).Set(refunded)
+	if l.credit != nil {
+		l.credit.SetInt64(0)
+	}
 }
 
 // Status reads the current status.
@@ -920,9 +1086,12 @@ func (r *Runner) RevertExtension(ctx context.Context, lease *Lease, previous Ext
 // ResumeLease thaws a frozen container without buying time.
 //
 // The direct-payment path thaws inside ExtendLease, because there the act of
-// paying and the act of extending are one operation. An escrow session pays at
-// the contract before it ever reaches the node, so by the time the node hears
-// about it the only thing left to do is unfreeze — which is this.
+// paying and the act of extending are one operation. A session's credit is
+// banked separately from the thaw — AddCredit then this — so the two steps are
+// distinct here.
+//
+// The meter's clock restarts with the thaw, so the frozen stretch is never
+// charged for. A renter who was slow to top up got nothing during it.
 //
 // A renter mid-task who was slow to top up gets their work back exactly as
 // they left it: pause is the cgroup freezer, not a kill.
@@ -935,6 +1104,8 @@ func (r *Runner) ResumeLease(ctx context.Context, lease *Lease) error {
 	containerID := lease.containerID
 	lease.pausedAt = nil
 	lease.status = LeaseActive
+	lease.lastTickAt = time.Now()
+	lease.syncExpiryLocked()
 	lease.mu.Unlock()
 
 	if containerID == "" {

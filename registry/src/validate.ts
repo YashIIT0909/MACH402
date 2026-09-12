@@ -80,7 +80,8 @@ export const heartbeatSchema = z.object({
       cpu_cores: z.number().int().positive().max(1024),
       workspace_gb: z.number().int().nonnegative().max(1_000_000),
       egress_allowlist: z.array(shortText).max(256),
-      escrow_contract: shortText.optional(),
+      payment_mode: z.enum(["direct", "session"]).optional(),
+      chunk_seconds: z.number().int().positive().max(86_400).optional(),
       price_tinybars_per_second: z
         .string()
         .regex(/^\d{1,20}$/, "price_tinybars_per_second must be a whole number of tinybars, as a string")

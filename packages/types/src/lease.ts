@@ -154,22 +154,35 @@ export type LeaseOffer = {
   egress_allowlist: string[];
 
   /**
-   * Present only when this node sells interactive time through the escrow
-   * contract rather than by forward payment.
+   * How this node's interactive time is paid for, and therefore whether
+   * stopping early gives anything back.
    *
-   * Its absence is meaningful, not just missing data: it tells a renter that
-   * this node's time is paid forward per slice and is NOT refundable if they
-   * stop early. A client should decide which flow to use from this field rather
+   * "direct" is forward payment per slice: what a renter buys is theirs
+   * whether they use it or not. "session" meters a paid-up credit second by
+   * second and refunds the unburned remainder when the session ends.
+   *
+   * Absent on a node running a build from before sessions existed, which means
+   * "direct" — a client should decide which flow to use from this field rather
    * than from trying one and seeing what happens.
    */
-  escrow_contract?: string;
+  payment_mode?: "direct" | "session";
 
   /**
-   * The rate the escrow contract settles at, in tinybars per second.
+   * The rate a session burns at, in tinybars per second.
    *
-   * Present alongside escrow_contract. Per second rather than per minute
-   * because that is the granularity a refund is computed at — the whole reason
-   * a renter would choose this flow.
+   * Present alongside `payment_mode: "session"`. Per second rather than per
+   * minute because that is the granularity a refund is computed at — the whole
+   * reason a renter would choose this flow.
    */
   price_tinybars_per_second?: string;
+
+  /**
+   * The most time one session payment ever buys, in seconds.
+   *
+   * This is the renter's exposure: the node holds at most one chunk's worth of
+   * their money ahead of the compute it pays for, and the running "owed if you
+   * stopped now" figure is published to the node's audit topic every fifteen
+   * seconds on top of that.
+   */
+  chunk_seconds?: number;
 };

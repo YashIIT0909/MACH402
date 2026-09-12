@@ -15,6 +15,16 @@
 // the renter says they sent. A renter controls the transaction id they present
 // and every argument inside it; the only thing they cannot forge is what the
 // contract actually stored.
+//
+// PARKED. Nothing on the default session path calls this any more: sessions are
+// now bought with an ordinary x402 chunk payment and metered down by the node,
+// with the refund-owed figure published continuously to the provider's audit
+// topic. This package, `client/src/escrow.ts` and `contracts/SessionEscrow.sol`
+// are kept together as the harder-guarantee fallback a future
+// `payment_mode: escrow-vault` could reactivate — the guarantee it gives is
+// genuinely stronger (the provider never holds the renter's money at all) and
+// deleting it would foreclose that for no benefit. `PricePerSecond` below is
+// still live: it is the one piece of arithmetic both modes share.
 package escrow
 
 import (

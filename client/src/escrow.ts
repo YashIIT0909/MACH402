@@ -14,6 +14,14 @@
  * there is nothing left for a third party to do — the provider's node simply
  * reads the result from the public mirror node.
  *
+ * PARKED. The `session` command no longer uses this: a metered session is an
+ * ordinary x402 payment against the node, and the refund comes back from the
+ * provider against a running balance they publish to their own audit topic.
+ * This file, `agent/internal/escrow` and `contracts/SessionEscrow.sol` are kept
+ * together as the harder-guarantee fallback a future `payment_mode:
+ * escrow-vault` could reactivate — there the provider never holds the renter's
+ * money at all — and deleting them would foreclose that for no benefit.
+ *
  * Units: every amount here is TINYBARS, because that is what `msg.value` is
  * inside the Hedera EVM. Nothing in this file converts to weibars, and nothing
  * should — see the unit note at the top of SessionEscrow.sol.

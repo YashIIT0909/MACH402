@@ -14,22 +14,12 @@ import (
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
 	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
-	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
 )
 
 // maxSessionSpecBytes bounds the request body, like the lease spec it mirrors.
 const maxSessionSpecBytes = 1 << 16
-
-// HeaderDepositProof carries the renter's proof that they funded a session.
-//
-// A deliberately separate header from PAYMENT-SIGNATURE. The x402 header
-// carries a signed-but-unsettled transfer for a facilitator to submit; this
-// carries a transaction id for something already final on Hedera consensus.
-// Reusing the name would mean two incompatible payloads under one header, and
-// the first client to send the wrong one would get a confusing failure rather
-// than a clear 402.
-const HeaderDepositProof = "PAYMENT-DEPOSIT"
 
 // sessionSpec is what a renter asks for. Mirrors SessionSpec in packages/types.
 type sessionSpec struct {
@@ -38,17 +28,14 @@ type sessionSpec struct {
 	RequireGPU bool   `json:"require_gpu"`
 }
 
-// sessionQuote is the 402 body: everything needed to make the deposit.
-type sessionQuote struct {
-	SessionID              string `json:"session_id"`
-	EscrowContract         string `json:"escrow_contract"`
-	ProviderAddress        string `json:"provider_address"`
-	PriceTinybarsPerSecond string `json:"price_tinybars_per_second"`
-	MinSeconds             int    `json:"min_seconds"`
-	MaxSeconds             int    `json:"max_seconds"`
-	MaxTotalSeconds        int    `json:"max_total_seconds"`
-	Network                string `json:"network"`
-}
+// There is no separate session quote endpoint any more, and deliberately so.
+// A session is bought with an ordinary x402 cycle, so the authoritative price
+// is in the PAYMENT-REQUIRED header of the 402 like every other paid route
+// here, and the shopping-ahead terms — rate, bounds, chunk size — are in
+// nodespec.LeaseOffer on the free /v1/specs. The escrow flow needed its own
+// quote because the renter had to echo contract arguments back; nothing does
+// that now, and a second source for the same numbers is a second thing to keep
+// in agreement with the first.
 
 // sessionResponse is the 200 body. Mirrors SessionCreated in packages/types.
 type sessionResponse struct {
@@ -67,34 +54,42 @@ type sessionResponse struct {
 	JupyterToken string `json:"jupyter_token"`
 	TunnelMode   string `json:"tunnel_mode"`
 
-	DepositTransaction     string `json:"deposit_transaction"`
+	Transaction    string `json:"transaction"`
+	Payer          string `json:"payer"`
+	AmountTinybars string `json:"amount_tinybars"`
+
 	PriceTinybarsPerSecond string `json:"price_tinybars_per_second"`
-	DepositedTinybars      string `json:"deposited_tinybars"`
+	CreditTinybars         string `json:"credit_tinybars"`
+	LowCredits             bool   `json:"low_credits"`
 	Seconds                int    `json:"seconds"`
 }
 
-// handleCreateSession sells interactive time paid for through escrow.
+// handleCreateSession sells interactive time as a metered, refundable credit.
 //
-// The ordering is handleCreateLease's, with one substitution: where the lease
-// flow calls the facilitator's /verify, this reads Hedera's mirror node. The
-// renter has already signed and submitted their own deposit, so there is
-// nothing to hand a facilitator — the payment is final on consensus and the
-// node's job is to check it, which needs no key at all.
+// Mechanically this is handleCreateLease: the same x402 exact-scheme cycle,
+// against the same facilitator, in the same order. What differs is what the
+// money becomes once it settles. A lease's payment buys TIME and is gone; a
+// session's payment buys CREDIT, which the meter burns down second by second
+// and whose remainder belongs to the renter the moment they stop.
 //
-//  1. validate the spec               -> 400, and costs nothing
-//  2. no deposit proof                -> 402 carrying the quote
-//  3. deposit proof present           -> verify it against the chain
-//  4. verified                        -> start the container, sign the cert
-//  5. container up                    -> point the tunnel at it
-//  6. tunnel up                       -> confirm it is actually reachable
-//  7. reachable                       -> receipt, audit trail, connection details
+//  1. validate the spec                  -> 400, and costs nothing
+//  2. no payment header                  -> 402 challenge, priced per chunk
+//  3. payment header present             -> /verify
+//  4. verified                           -> start the container, sign the cert
+//  5. container up                       -> point the tunnel at it
+//  6. tunnel up                          -> confirm it is actually reachable
+//  7. reachable                          -> /settle, and the credit is banked
 //
-// Step 7 has no settle call, and that difference is the whole point. A lease
-// takes the money at step 7 and can never give it back; a session's money is
-// already in the contract, and what happens at the end is a split computed
-// from elapsed time. So a session that fails at step 5 or 6 costs the renter
-// nothing real: nothing was provisioned, almost no time elapsed, and calling
-// settle returns essentially the whole deposit.
+// A failure anywhere before step 7 tears the session down and settles nothing,
+// so a session that never came up costs the renter nothing at all — which is
+// strictly better than the escrow flow this replaced, where a failed
+// provisioning left the renter's deposit needing a recovery call.
+//
+// The amount charged is capped at leases.session_chunk_seconds no matter how
+// long a session the renter asked for. That cap is the bound on the only trust
+// gap this design has: between this settlement and the refund, the provider is
+// holding money that is partly the renter's. Nothing else in the flow can make
+// that gap larger than one chunk.
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionsEnabled(w) {
 		return
@@ -105,9 +100,17 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.validateSessionSeconds(spec.Seconds); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// What is actually being sold now. The renter may have asked for an hour;
+	// they are charged for a chunk and top up as they go.
+	chunkSeconds := s.sessionChunk(spec.Seconds)
 
 	leaseSpec := runner.LeaseSpec{
-		Minutes:    secondsToMinutes(spec.Seconds),
+		Minutes:    secondsToMinutes(chunkSeconds),
 		PublicKey:  spec.PublicKey,
 		RequireGPU: spec.RequireGPU,
 	}
@@ -119,10 +122,6 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.validateSessionSeconds(spec.Seconds); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
 	if s.paused.Load() {
 		w.Header().Set("Retry-After", "60")
@@ -131,74 +130,23 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proof := r.Header.Get(HeaderDepositProof)
-	if proof == "" {
-		// No deposit yet. Mint a session id and quote — the renter deposits
-		// against exactly these terms and comes back.
-		sessionID, err := newSessionID()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not mint a session id")
-			return
-		}
-		s.respondWithSessionQuote(w, sessionID)
-		return
-	}
-
-	sessionID := r.Header.Get("PAYMENT-SESSION")
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest,
-			"a deposit proof needs the PAYMENT-SESSION header naming the session it funded")
-		return
-	}
-
-	quote, err := s.sessionQuoteFor(sessionID)
+	price, err := s.sessionPricePerSecond()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	amount := new(big.Int).Mul(price, big.NewInt(int64(chunkSeconds))).String()
 
-	verifyCtx, cancelVerify := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancelVerify()
+	payload, requirements, ok := s.collectPayment(w, r, amount, s.sessionDescription(chunkSeconds))
+	if !ok {
+		return
+	}
 
-	onchain, err := s.escrow.AwaitDeposit(verifyCtx, proof, escrow.Quote{
-		SessionID:       sessionID,
-		ProviderAddress: s.providerAddress,
-		PricePerSecond:  mustBig(quote.PriceTinybarsPerSecond),
-		// The deposit has to cover what was ASKED FOR, not merely the node's
-		// minimum. Otherwise a renter could request an hour, deposit for the
-		// minimum, and be handed a container sized and scheduled for the hour.
-		MinSeconds: int64(spec.Seconds),
-	})
+	sessionID, err := newSessionID()
 	if err != nil {
-		var rejection *escrow.Rejection
-		if errors.As(err, &rejection) {
-			// Verified and refused: the deposit exists and does not match what
-			// this node offered. Saying which part disagreed is safe — it is
-			// all public on-chain data — and it is the only way the renter can
-			// fix it.
-			s.emit(runner.Event{Kind: runner.EventRejected, LeaseID: sessionID, Detail: rejection.Reason})
-			writeError(w, http.StatusPaymentRequired, rejection.Reason)
-			return
-		}
-		s.log.Error("could not verify a session deposit", "session", sessionID, "error", err)
-		writeError(w, http.StatusBadGateway,
-			"could not confirm the deposit against Hedera's mirror node; nothing was provisioned: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "could not mint a session id")
 		return
 	}
-
-	// A session whose paid time has already run out buys nothing. Without this,
-	// a renter could re-present an expired-but-unsettled deposit and be given a
-	// fresh container: the contract would still charge them for the wall-clock
-	// time, so it is not theft, but the node would be running work nobody is
-	// paying it for from here on.
-	if expiresAt := onchain.ExpiresAt(); expiresAt <= time.Now().Unix() {
-		writeError(w, http.StatusPaymentRequired,
-			"that session's paid time has already elapsed; open a new one, and call settle to close this one")
-		return
-	}
-
-	s.emit(runner.Event{Kind: runner.EventVerified, LeaseID: sessionID, Payer: onchain.Renter})
-
 	leaseID := newLeaseID()
 	token := newAccessToken()
 
@@ -207,41 +155,68 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	lease, err := s.runner.StartLease(provisionCtx, leaseID, token, s.ca.PublicKey(), leaseSpec)
 	if err != nil {
+		// Nothing settled, so the renter has not been charged.
 		s.log.Error("session failed to start", "session", sessionID, "error", err)
-		writeError(w, http.StatusInternalServerError,
-			"could not start the session; call settle on the escrow contract to recover your deposit: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "could not start the session; nothing was charged: "+err.Error())
 		return
 	}
-
-	// The contract's startTime is authoritative about when the paid time ends,
-	// because the contract is what computes the final split. Mirroring it here
-	// rather than measuring locally keeps the freeze from landing early or late.
-	expiresAt := time.Unix(onchain.ExpiresAt(), 0)
-	lease.MarkEscrow(sessionID, proof, expiresAt, onchain.Duration.Int64())
 
 	certificate, endpoints, err := s.publishLease(provisionCtx, lease)
 	if err != nil {
-		s.log.Error("session never became reachable", "session", sessionID, "error", err)
+		s.log.Error("session never became reachable; nothing was charged", "session", sessionID, "error", err)
 		s.runner.StopLease(provisionCtx, lease, runner.LeaseFailed)
 		s.tunnel.Clear(provisionCtx)
-		// Nothing usable ever ran, and barely any time has elapsed, so settling
-		// now returns almost the entire deposit. The node offers to do it so a
-		// renter is not left chasing a refund for a failure that was not theirs.
-		s.settleSession(provisionCtx, lease)
 		writeError(w, http.StatusBadGateway,
-			"the session came up but could not be reached from the internet, so it was torn down "+
-				"and your deposit refunded: "+err.Error())
+			"the session came up but could not be reached from the internet, so nothing was charged: "+err.Error())
 		return
 	}
 
-	s.recordSessionPayment(lease, onchain, hcs.KindSessionOpen)
+	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+	defer settleCancel()
 
+	settlement, err := s.fac.Settle(settleCtx, x402.SettleRequest{
+		X402Version:         x402.Version,
+		PaymentPayload:      *payload,
+		PaymentRequirements: *requirements,
+	})
+	if err != nil || !settlement.Success {
+		s.emit(runner.Event{Kind: runner.EventSettleFailed, LeaseID: leaseID, Detail: reasonOf(settlement)})
+		s.log.Error("settlement failed after the session started; tearing it down",
+			"session", sessionID, "error", err, "reason", reasonOf(settlement))
+		s.runner.StopLease(settleCtx, lease, runner.LeaseFailed)
+		s.tunnel.Clear(settleCtx)
+		s.respondWithChallengeFor(w, r, settlementFailureMessage(settlement, err), amount, s.sessionDescription(chunkSeconds))
+		return
+	}
+
+	// The credit is what the facilitator confirmed moved, never a figure
+	// recomputed from the price table. The refund trail's whole claim is that
+	// the node owes back money it actually received, so the ledger has to start
+	// from the settled amount rather than from what the node meant to charge.
+	credit, ok := new(big.Int).SetString(requirements.Amount, 10)
+	if !ok {
+		// Unreachable: s.requirements built this string from a *big.Int a few
+		// lines ago. Refusing to meter an amount that cannot be parsed is still
+		// the right answer, because the alternative is a session with no ledger.
+		s.log.Error("settled amount is not an integer", "session", sessionID, "amount", requirements.Amount)
+		s.runner.StopLease(settleCtx, lease, runner.LeaseFailed)
+		s.tunnel.Clear(settleCtx)
+		writeError(w, http.StatusInternalServerError, "this node settled a payment it cannot meter; contact the provider")
+		return
+	}
+	lease.MarkMetered(sessionID, settlement.Payer, price, credit)
+
+	s.recordSessionPayment(lease, settlement, requirements, hcs.KindSessionOpen)
+
+	if err := x402.WriteSettlement(w, settlement); err != nil {
+		s.log.Error("could not attach settlement header", "error", err)
+	}
 	writeJSON(w, http.StatusOK, sessionResponse{
 		SessionID:              sessionID,
 		LeaseID:                leaseID,
 		Token:                  token,
 		Status:                 string(lease.Status()),
-		ExpiresAt:              expiresAt.UTC().Format(time.RFC3339),
+		ExpiresAt:              lease.ExpiresAt().UTC().Format(time.RFC3339),
 		Certificate:            certificate,
 		SSHUser:                leaseSSHUser,
 		SSHHost:                endpoints.SSHHost,
@@ -249,19 +224,23 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		JupyterURL:             endpoints.JupyterURL,
 		JupyterToken:           lease.JupyterToken(),
 		TunnelMode:             endpoints.Mode,
-		DepositTransaction:     proof,
-		PriceTinybarsPerSecond: onchain.PricePerSecond.String(),
-		DepositedTinybars:      onchain.Deposited.String(),
-		Seconds:                int(onchain.Duration.Int64()),
+		Transaction:            settlement.Transaction,
+		Payer:                  settlement.Payer,
+		AmountTinybars:         requirements.Amount,
+		PriceTinybarsPerSecond: price.String(),
+		CreditTinybars:         lease.Credit().String(),
+		LowCredits:             s.lowCredits(lease),
+		Seconds:                int(lease.SecondsRemaining()),
 	})
 }
 
-// handleTopUpSession extends a live session after a verified on-chain top-up.
+// handleTopUpSession banks another paid chunk onto a live session.
 //
-// Unlike a lease extension there is nothing to revert on failure: the renter's
-// money is already in the contract before this endpoint is called, and the node
-// is only reading what the chain says. Either the top-up is there — in which
-// case the time is theirs — or it is not, and nothing changed.
+// The metered twin of handleExtendLease, and simpler than it: an extension has
+// to be applied before it settles and reverted if it does not, because the
+// thing being bought is time that has to be in place first. A top-up buys
+// credit, which is worth nothing until it is banked — so it is banked after the
+// settlement, and a failed payment leaves the session exactly as it was.
 func (s *Server) handleTopUpSession(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionsEnabled(w) {
 		return
@@ -271,58 +250,83 @@ func (s *Server) handleTopUpSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if lease.Status().IsTerminal() {
+		writeError(w, http.StatusConflict,
+			fmt.Sprintf("this session is already %s and cannot be topped up", lease.Status()))
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	chunkSeconds := s.cfg.Leases.SessionChunkSeconds
+
+	// The node's own total cap, checked before the renter is asked to pay so a
+	// chunk that would exceed it is refused for free.
+	maxTotal := s.cfg.Leases.MaxTotalMinutes * 60
+	price := lease.PricePerSecond()
+	if price.Sign() <= 0 {
+		writeError(w, http.StatusConflict, "this session has no meter; it cannot be topped up")
+		return
+	}
+	bought := new(big.Int).Add(lease.Burned(), lease.Credit())
+	boughtSeconds := new(big.Int).Div(bought, price).Int64()
+	if boughtSeconds+int64(chunkSeconds) > int64(maxTotal) {
+		writeError(w, http.StatusConflict,
+			fmt.Sprintf("this node caps a session at %d seconds total; %d have been bought already",
+				maxTotal, boughtSeconds))
+		return
+	}
+
+	amount := new(big.Int).Mul(price, big.NewInt(int64(chunkSeconds))).String()
+
+	payload, requirements, ok := s.collectPayment(w, r, amount, s.sessionDescription(chunkSeconds))
+	if !ok {
+		return
+	}
+
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancel()
 
-	// Read the contract rather than trusting the request: the renter's top-up
-	// already moved money, so the only question is what the chain now says the
-	// paid duration is.
-	//
-	// With the same bounded retry the deposit path uses. A renter calls this the
-	// moment their top-up reaches consensus, and the mirror node is seconds
-	// behind — reading once would reject a payment that has already happened,
-	// and do it with their session about to freeze.
-	onchain, err := s.escrow.AwaitTopUp(ctx, lease.SessionID(), lease.PaidSeconds())
-	if err != nil {
-		var rejection *escrow.Rejection
-		switch {
-		case errors.As(err, &rejection):
-			writeError(w, http.StatusConflict, rejection.Reason)
-		case errors.Is(err, escrow.ErrNoAdditionalTime):
-			writeError(w, http.StatusPaymentRequired,
-				"no additional time is visible on-chain yet; top up the escrow contract, then retry")
-		default:
-			writeError(w, http.StatusBadGateway, "could not read the session from the chain: "+err.Error())
-		}
+	settlement, err := s.fac.Settle(settleCtx, x402.SettleRequest{
+		X402Version:         x402.Version,
+		PaymentPayload:      *payload,
+		PaymentRequirements: *requirements,
+	})
+	if err != nil || !settlement.Success {
+		s.emit(runner.Event{Kind: runner.EventSettleFailed, LeaseID: lease.ID, Detail: reasonOf(settlement)})
+		s.log.Error("top-up settlement failed; the session is unchanged",
+			"session", lease.SessionID(), "reason", reasonOf(settlement))
+		s.respondWithChallengeFor(w, r, settlementFailureMessage(settlement, err), amount, s.sessionDescription(chunkSeconds))
 		return
 	}
 
-	expiresAt := time.Unix(onchain.ExpiresAt(), 0)
-
-	paidSeconds := int(onchain.Duration.Int64())
-	if max := s.cfg.Leases.MaxTotalMinutes * 60; paidSeconds > max {
-		// The renter has bought more than this node sells. Their money is not
-		// lost — they get it back at settle — but the extra time is not served.
-		writeError(w, http.StatusConflict,
-			fmt.Sprintf("this node caps a session at %d seconds total; the extra deposit is refunded at settle", max))
+	credit, ok := new(big.Int).SetString(requirements.Amount, 10)
+	if !ok {
+		s.log.Error("settled top-up is not an integer", "session", lease.SessionID(), "amount", requirements.Amount)
+		writeError(w, http.StatusInternalServerError, "this node settled a payment it cannot meter; contact the provider")
 		return
 	}
+	lease.AddCredit(credit)
 
-	// Buying time on a frozen session thaws it, exactly as extending a lease
-	// does — the renter's work is still in the paused container.
+	// Paying thaws a frozen session, for the same reason extending thaws a
+	// frozen lease: the renter's work is still in the paused container, and
+	// buying more time is what resumption means. The meter's clock restarts
+	// with the thaw, so the frozen stretch is never charged for.
 	if lease.Status() == runner.LeasePaused {
-		if err := s.runner.ResumeLease(ctx, lease); err != nil {
+		if err := s.runner.ResumeLease(settleCtx, lease); err != nil {
 			s.log.Error("could not resume a topped-up session", "session", lease.SessionID(), "error", err)
 		}
 	}
-	lease.ExtendPaidUntil(expiresAt, int64(paidSeconds))
 
-	s.recordSessionPayment(lease, onchain, hcs.KindSessionOpen)
-	writeJSON(w, http.StatusOK, s.sessionState(lease, onchain))
+	s.recordSessionPayment(lease, settlement, requirements, hcs.KindSessionOpen)
+
+	if err := x402.WriteSettlement(w, settlement); err != nil {
+		s.log.Error("could not attach settlement header", "error", err)
+	}
+	writeJSON(w, http.StatusOK, s.sessionState(lease))
 }
 
-// handleSessionState reports status and time remaining. Free, token-gated.
+// handleSessionState reports status, credit and time remaining. Free,
+// token-gated: charging for the poll that decides whether to pay would be
+// absurd, and this is also how a renter reads what they are owed.
 func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionsEnabled(w) {
 		return
@@ -331,28 +335,17 @@ func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	// Best-effort chain read: a mirror hiccup should degrade this to the node's
-	// own view rather than fail a poll the renter's CLI depends on.
-	onchain, err := s.escrow.Session(ctx, lease.SessionID())
-	if err != nil {
-		s.log.Warn("could not read session state from the chain", "session", lease.SessionID(), "error", err)
-		onchain = nil
-	}
-	writeJSON(w, http.StatusOK, s.sessionState(lease, onchain))
+	writeJSON(w, http.StatusOK, s.sessionState(lease))
 }
 
 // handleSessionStop ends a session early. Free, token-gated.
 //
-// This is where escrow earns its place. Stopping a lease ends the meter and
-// forfeits the rest of the slice; stopping a session tears the container down
-// AND closes the contract, so the renter is paid back for time they did not
-// use. The node settles on their behalf when it can, rather than leaving them
-// to remember — but `settle` is permissionless, so a renter whose node has
-// vanished can always close it themselves.
+// This is where metering earns its place. Stopping a lease ends the meter and
+// forfeits the rest of the slice; stopping a session charges for the seconds
+// actually used and returns the rest. The final burn happens first, so what is
+// refunded is measured against the same meter that has been publishing burn
+// checkpoints all along rather than against a fresh calculation at the moment
+// the provider has the most reason to prefer a different answer.
 func (s *Server) handleSessionStop(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionsEnabled(w) {
 		return
@@ -365,127 +358,194 @@ func (s *Server) handleSessionStop(w http.ResponseWriter, r *http.Request) {
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 	defer cancel()
 
+	// Charge for the time up to this instant before anything is torn down.
+	if lease.Status() == runner.LeaseActive {
+		lease.Burn(time.Now())
+	}
+
 	s.runner.StopLease(stopCtx, lease, runner.LeaseStopped)
 	s.tunnel.Clear(stopCtx)
+
+	// Settle before answering, so what comes back already reflects the refund.
+	// A renter reading `settle_state: done` and `credit_tinybars: 0` has their
+	// answer in the same round trip they used to stop.
 	s.settleSession(stopCtx, lease)
-
-	onchain, err := s.escrow.Session(stopCtx, lease.SessionID())
-	if err != nil {
-		onchain = nil
-	}
-	writeJSON(w, http.StatusOK, s.sessionState(lease, onchain))
+	writeJSON(w, http.StatusOK, s.sessionState(lease))
 }
 
-// settleSession closes a session on-chain, if this node is configured to.
+// tickMeter charges a live session for the time since the last tick and
+// publishes what the node would owe if it stopped right now.
 //
-// Not an error when it cannot. `settle` is permissionless and one-shot: the
-// renter's own clean exit may already have closed it, and if nobody has, the
-// money is still safely in the contract waiting for whoever calls first. So a
-// failure here is logged with the session id — which is all anyone needs to
-// close it by hand — and nothing more.
-func (s *Server) settleSession(ctx context.Context, lease *runner.Lease) {
-	sessionID := lease.SessionID()
-	// Not a session, already settled, or this node does not sell sessions at
-	// all — the last case matters because the lease sweep calls this for every
-	// lease, including direct-paid ones on a node with no escrow configured.
-	if s.escrow == nil || sessionID == "" || lease.SettleState() != runner.SettlePending {
-		return
-	}
-	if s.sidecar == nil {
-		// self_settle is off. Say so once, with the id, so a provider who wants
-		// their payout knows exactly what to call.
-		s.log.Info("session finished and is not settled on-chain; anyone may call settle",
-			"session", sessionID, "contract", s.escrow.Contract())
-		return
-	}
-
-	transaction, err := s.sidecar.SettleSession(ctx, s.escrow.Contract(), sessionID)
-	if err != nil {
-		s.log.Error("could not settle the session on-chain; the deposit is still in the contract",
-			"session", sessionID, "error", err)
-		return
-	}
-	lease.MarkSettled()
-	s.log.Info("session settled on-chain", "session", sessionID, "transaction", transaction)
-
-	if onchain, err := s.escrow.Session(ctx, sessionID); err == nil {
-		s.recordSessionSettlement(lease, onchain, transaction)
-	}
-}
-
-// recordSessionPayment logs a verified deposit locally and to the audit topic.
+// The publish is unconditional and happens on every tick, not only at open and
+// close, and that is the point rather than a convenience. Between a chunk
+// payment and its refund, the renter's remaining money is in the provider's
+// hands and only the provider's bookkeeping says how much of it is still the
+// renter's. Publishing that figure continuously, to a topic ordered by Hedera
+// consensus and bound by a running hash, converts it from a claim into a public
+// fact recorded before anyone had a motive to shade it. A provider who later
+// refuses to refund is refusing a number they themselves signed, repeatedly, in
+// advance.
 //
-// A session's "payment" is not a settlement — the money is in the contract, not
-// in the provider's account — so the receipt records what was deposited and
-// under what terms. The matching settle record comes later and the two together
-// are what let a third party check that the payout matched the promise.
-func (s *Server) recordSessionPayment(lease *runner.Lease, onchain *escrow.Session, kind string) {
-	sessionID := lease.SessionID()
+// Nothing about freezing or reaping lives here: credit reaching zero moves the
+// lease's expiry to now, and the sweep's existing LeaseActive branch does the
+// rest. One scheduler, one freeze path.
+func (s *Server) tickMeter(lease *runner.Lease) {
+	burned, remaining := lease.Burn(time.Now())
 
-	s.emit(runner.Event{
-		Kind:        runner.EventSettled,
-		LeaseID:     lease.ID,
-		Payer:       onchain.Renter,
-		Transaction: lease.DepositTransaction(),
-		Tinybars:    onchain.Deposited.String(),
-	})
-
-	receipt := receipts.Receipt{
-		JobID:          sessionID,
-		Transaction:    lease.DepositTransaction(),
-		Payer:          onchain.Renter,
-		PayTo:          s.cfg.PayTo,
-		AmountTinybars: onchain.Deposited.String(),
-		Asset:          s.cfg.Asset,
-		Network:        s.cfg.Network,
-	}
-	if err := s.receipts.Append(receipt); err != nil {
-		s.log.Error("could not write session receipt", "session", sessionID, "error", err)
+	price := lease.PricePerSecond()
+	var elapsed int64
+	if price.Sign() > 0 {
+		elapsed = new(big.Int).Div(lease.Burned(), price).Int64()
 	}
 
 	s.publishAudit(hcs.AuditMessage{
-		Kind:           kind,
-		SessionID:      sessionID,
+		Kind:           hcs.KindSessionBurn,
+		SessionID:      lease.SessionID(),
 		JobID:          lease.ID,
-		Transaction:    lease.DepositTransaction(),
-		Payer:          onchain.Renter,
+		Payer:          lease.Payer(),
 		PayTo:          s.cfg.PayTo,
-		AmountTinybars: onchain.Deposited.String(),
+		AmountTinybars: lease.Burned().String(),
+		RefundTinybars: remaining.String(),
+		PricePerSecond: price.String(),
+		ElapsedSecs:    elapsed,
 		Asset:          s.cfg.Asset,
 		Network:        s.cfg.Network,
-		PricePerSecond: onchain.PricePerSecond.String(),
-		DurationSecs:   onchain.Duration.Int64(),
+	})
+
+	s.log.Debug("session meter ticked",
+		"session", lease.SessionID(),
+		"burned_tinybars", burned,
+		"owed_tinybars", remaining,
+	)
+
+	// Mirrored onto the dashboard's event feed, not just the audit topic: a
+	// provider watching their own node locally should see a session's credit
+	// counting down in real time without going and reading their own HCS topic
+	// through a mirror node to find out.
+	s.emit(runner.Event{
+		Kind:     runner.EventSessionBurn,
+		LeaseID:  lease.ID,
+		Payer:    lease.Payer(),
+		Tinybars: remaining.String(),
+		Detail:   fmt.Sprintf("burned %s, %s owed if stopped now", burned.String(), remaining.String()),
+	})
+}
+
+// settleSession returns a finished session's unburned credit to its renter.
+//
+// Called from every path a session can end by — the renter stopping it, the
+// sweep reaping it after its grace period — and idempotent, because more than
+// one of those can fire for the same session.
+//
+// A node with self_settle off cannot pay, and says so with everything needed to
+// pay by hand: the session, the payer and the amount. That is not an error
+// state that loses anyone money, but it is a debt, and the honest thing is to
+// log it as one rather than to let it disappear. The burn trail on the audit
+// topic is the record that outlives the log.
+func (s *Server) settleSession(ctx context.Context, lease *runner.Lease) {
+	sessionID := lease.SessionID()
+	// Not a session, or already settled. The first case matters because the
+	// lease sweep calls this for every lease, including direct-paid ones.
+	if sessionID == "" || lease.SettleState() != runner.SettlePending {
+		return
+	}
+
+	owed := lease.Credit()
+	payer := lease.Payer()
+
+	if owed.Sign() <= 0 {
+		// The session ran its credit all the way down. Nothing is owed, which
+		// is a settled session rather than an unpaid one.
+		lease.MarkSettled(owed)
+		s.recordSessionSettlement(lease, owed, "")
+		return
+	}
+
+	if s.sidecar == nil {
+		s.log.Warn("session ended with credit owed back, and this node cannot refund it itself; "+
+			"pay it by hand or turn on leases.self_settle",
+			"session", sessionID, "payer", payer, "owed_tinybars", owed.String())
+		s.recordSessionSettlement(lease, owed, "")
+		return
+	}
+
+	transaction, err := s.sidecar.Refund(ctx, payer, owed, "cleargate session "+sessionID)
+	if err != nil {
+		// The debt stands. Left as SettlePending on purpose: the sweep calls
+		// this again on its next pass, so a transient failure retries itself
+		// rather than quietly writing the renter's money off.
+		s.log.Error("could not refund a session's unburned credit; it is still owed",
+			"session", sessionID, "payer", payer, "owed_tinybars", owed.String(), "error", err)
+		return
+	}
+
+	lease.MarkSettled(owed)
+	s.log.Info("session refunded",
+		"session", sessionID, "payer", payer, "refund_tinybars", owed.String(), "transaction", transaction)
+	s.recordSessionSettlement(lease, owed, transaction)
+}
+
+// recordSessionPayment logs a settled chunk locally and to the audit topic.
+//
+// A chunk payment is an ordinary settlement — the money is in pay_to, exactly
+// as a lease's is — so it goes through the same receipt shape. What makes a
+// session different is the burn trail that follows it, not this.
+func (s *Server) recordSessionPayment(
+	lease *runner.Lease,
+	settlement *x402.SettleResponse,
+	requirements *x402.PaymentRequirements,
+	kind string,
+) {
+	s.recordLeasePayment(lease.ID, settlement, requirements)
+
+	s.publishAudit(hcs.AuditMessage{
+		Kind:           kind,
+		SessionID:      lease.SessionID(),
+		JobID:          lease.ID,
+		Transaction:    settlement.Transaction,
+		Payer:          settlement.Payer,
+		PayTo:          requirements.PayTo,
+		AmountTinybars: requirements.Amount,
+		Asset:          requirements.Asset,
+		Network:        requirements.Network,
+		PricePerSecond: lease.PricePerSecond().String(),
+		DurationSecs:   lease.SecondsRemaining(),
+		RefundTinybars: lease.Credit().String(),
 	})
 
 	s.log.Info("session funded",
-		"session", sessionID,
-		"payer", onchain.Renter,
-		"deposited_tinybars", onchain.Deposited,
-		"seconds", onchain.Duration,
+		"session", lease.SessionID(),
+		"payer", settlement.Payer,
+		"amount_tinybars", requirements.Amount,
+		"credit_tinybars", lease.Credit().String(),
 	)
 }
 
 // recordSessionSettlement publishes the closing half of a session's trail: what
-// was actually paid out, against the deposit published when it opened.
-func (s *Server) recordSessionSettlement(lease *runner.Lease, onchain *escrow.Session, transaction string) {
-	elapsed := onchain.Duration.Int64()
-	if actual := time.Now().Unix() - onchain.StartTime.Int64(); actual < elapsed {
-		elapsed = actual
+// was earned, what was returned, and the transaction that returned it.
+//
+// An empty transaction is meaningful and is published rather than suppressed —
+// it says the node reached the end of a session owing this much and did not pay
+// it, which is precisely the thing a renter needs on the record.
+func (s *Server) recordSessionSettlement(lease *runner.Lease, refund *big.Int, transaction string) {
+	price := lease.PricePerSecond()
+	earned := lease.Burned()
+
+	var elapsed int64
+	if price.Sign() > 0 {
+		elapsed = new(big.Int).Div(earned, price).Int64()
 	}
-	earned := new(big.Int).Mul(onchain.PricePerSecond, big.NewInt(elapsed))
-	refund := new(big.Int).Sub(onchain.Deposited, earned)
 
 	s.publishAudit(hcs.AuditMessage{
 		Kind:           hcs.KindSessionSettled,
 		SessionID:      lease.SessionID(),
 		JobID:          lease.ID,
 		Transaction:    transaction,
-		Payer:          onchain.Renter,
+		Payer:          lease.Payer(),
 		PayTo:          s.cfg.PayTo,
 		AmountTinybars: earned.String(),
 		RefundTinybars: refund.String(),
-		PricePerSecond: onchain.PricePerSecond.String(),
-		DurationSecs:   onchain.Duration.Int64(),
+		PricePerSecond: price.String(),
 		ElapsedSecs:    elapsed,
 		Asset:          s.cfg.Asset,
 		Network:        s.cfg.Network,
@@ -494,61 +554,34 @@ func (s *Server) recordSessionSettlement(lease *runner.Lease, onchain *escrow.Se
 
 // --- quoting and helpers ---
 
-// respondWithSessionQuote answers 402 with everything needed to deposit.
+// sessionChunk is how many seconds one payment buys.
 //
-// Shaped like the x402 challenge it sits beside — authoritative in the body,
-// 402 status, no-store — but carrying contract terms instead of transfer
-// requirements, because there is no transfer to sign.
-func (s *Server) respondWithSessionQuote(w http.ResponseWriter, sessionID string) {
-	quote, err := s.sessionQuoteFor(sessionID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+// Capped at leases.session_chunk_seconds whatever the renter asked for. A
+// renter who wants an hour gets a chunk now and tops up as they go, which
+// costs them nothing extra and bounds what the provider is ever holding of
+// theirs to a single chunk.
+func (s *Server) sessionChunk(requested int) int {
+	chunk := s.cfg.Leases.SessionChunkSeconds
+	if requested > 0 && requested < chunk {
+		return requested
 	}
-
-	s.emit(runner.Event{Kind: runner.EventChallenged, LeaseID: sessionID})
-
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusPaymentRequired, map[string]any{
-		"error": "Deposit required",
-		"quote": quote,
-		"how": fmt.Sprintf(
-			"call openSession(%s, %s, %s, <seconds>) on the escrow contract, "+
-				"then repeat this request with %s set to the transaction id and PAYMENT-SESSION set to the session id",
-			sessionID, quote.ProviderAddress, quote.PriceTinybarsPerSecond, HeaderDepositProof),
-	})
+	return chunk
 }
 
-// sessionQuoteFor builds the terms this node will honour.
-//
-// Everything comes from the node's own config — never from the renter's
-// request — which is the same rule s.requirements follows for x402. It is what
-// makes verification meaningful: the node compares the chain against what IT
-// said, not against what the renter claims it said.
-func (s *Server) sessionQuoteFor(sessionID string) (sessionQuote, error) {
-	price, err := s.sessionPricePerSecond()
-	if err != nil {
-		return sessionQuote{}, err
-	}
-	leases := s.cfg.Leases
-	return sessionQuote{
-		SessionID:              sessionID,
-		EscrowContract:         s.escrow.Contract(),
-		ProviderAddress:        s.providerAddress,
-		PriceTinybarsPerSecond: price.String(),
-		MinSeconds:             leases.MinMinutes * 60,
-		MaxSeconds:             leases.MaxMinutes * 60,
-		MaxTotalSeconds:        leases.MaxTotalMinutes * 60,
-		Network:                s.cfg.Network,
-	}, nil
+// sessionDescription is what the 402 challenge says the money is for. It names
+// the chunk rather than the session the renter asked for, because the chunk is
+// what this particular payment buys.
+func (s *Server) sessionDescription(seconds int) string {
+	return fmt.Sprintf("%d seconds of metered, refundable GPU time on ClearGate node %s",
+		seconds, s.cfg.NodeID)
 }
 
-// sessionPricePerSecond is the rate the contract settles at.
+// sessionPricePerSecond is the rate a session's credit burns at.
 //
 // Derived from the per-minute lease price unless a provider set a per-second
-// figure explicitly. Converted in exactly one place: the contract multiplies
-// this by elapsed seconds, so two conversions that disagreed would mean the
-// node quoting one rate and being paid another.
+// figure explicitly. Converted in exactly one place: the meter multiplies this
+// by elapsed seconds, so two conversions that disagreed would mean the node
+// quoting one rate and burning at another.
 func (s *Server) sessionPricePerSecond() (*big.Int, error) {
 	if explicit := s.cfg.Leases.PriceTinybarsPerSecond; explicit != "" {
 		price, ok := new(big.Int).SetString(explicit, 10)
@@ -575,47 +608,55 @@ func (s *Server) validateSessionSeconds(seconds int) error {
 	return nil
 }
 
-// sessionState renders the read-only view, preferring the chain's numbers where
-// they are available — the contract is the authority on what was paid for.
-func (s *Server) sessionState(lease *runner.Lease, onchain *escrow.Session) map[string]any {
+// lowCredits reports whether the renter should be buying another chunk.
+//
+// Computed here rather than by the client, because the threshold has to be
+// bigger than the sweep interval plus a payment round trip — numbers the node
+// knows and a client would have to guess.
+func (s *Server) lowCredits(lease *runner.Lease) bool {
+	return lease.SecondsRemaining() < int64(s.cfg.Leases.LowCreditThresholdSeconds)
+}
+
+// sessionState renders the read-only view. Everything about money comes from
+// the lease's own ledger, which is the same ledger the burn checkpoints are
+// published from — so what a renter reads here and what a third party reads off
+// the audit topic cannot disagree.
+func (s *Server) sessionState(lease *runner.Lease) map[string]any {
 	base := lease.State()
 
-	settleState := string(lease.SettleState())
-	if onchain != nil && onchain.Settled {
-		settleState = string(runner.SettleDone)
-	}
-
-	paidSeconds := base.PaidMinutes * 60
-	expiresAt := base.ExpiresAt
-	if onchain != nil {
-		paidSeconds = int(onchain.Duration.Int64())
-		expiresAt = time.Unix(onchain.ExpiresAt(), 0).UTC().Format(time.RFC3339)
-	}
-
 	return map[string]any{
-		"session_id":        lease.SessionID(),
-		"lease_id":          base.LeaseID,
-		"status":            base.Status,
-		"created_at":        base.CreatedAt,
-		"expires_at":        expiresAt,
-		"seconds_remaining": base.SecondsRemaining,
-		"paid_seconds":      paidSeconds,
-		"gpu":               base.GPU,
-		"settle_state":      settleState,
+		"session_id":                lease.SessionID(),
+		"lease_id":                  base.LeaseID,
+		"status":                    base.Status,
+		"created_at":                base.CreatedAt,
+		"expires_at":                base.ExpiresAt,
+		"seconds_remaining":         lease.SecondsRemaining(),
+		"paid_seconds":              base.PaidMinutes * 60,
+		"gpu":                       base.GPU,
+		"price_tinybars_per_second": lease.PricePerSecond().String(),
+		"credit_tinybars":           lease.Credit().String(),
+		"burned_tinybars":           lease.Burned().String(),
+		// What was actually paid back, once settled. Deliberately not the same
+		// field as credit_tinybars: credit is "owed right now" and is correctly
+		// zero the instant it has been refunded, so a caller reading state after
+		// the session ended needs this one to see what they got.
+		"refunded_tinybars": lease.Refunded().String(),
+		"low_credits":       s.lowCredits(lease),
+		"settle_state":      string(lease.SettleState()),
 		"error":             base.Error,
 	}
 }
 
-// sessionsEnabled answers 404 on a node that does not sell escrow sessions.
+// sessionsEnabled answers 404 on a node that does not sell metered sessions.
 //
 // 404 rather than 403, for the same reason /v1/leases does: a node that never
 // opted in should be indistinguishable from one running a version from before
 // sessions existed.
 func (s *Server) sessionsEnabled(w http.ResponseWriter) bool {
-	if s.escrow != nil && s.runner.LeasesEnabled() && s.ca != nil && s.tunnel != nil {
+	if s.sessions && s.runner.LeasesEnabled() && s.ca != nil && s.tunnel != nil {
 		return true
 	}
-	writeError(w, http.StatusNotFound, "this node does not offer escrow-backed sessions")
+	writeError(w, http.StatusNotFound, "this node does not offer metered sessions")
 	return false
 }
 
@@ -641,12 +682,11 @@ func decodeSessionSpec(r *http.Request) (sessionSpec, error) {
 	return spec, nil
 }
 
-// newSessionID mints the contract's key for a session.
+// newSessionID mints the key a renter's session is tracked by.
 //
-// Minted by the node, not the renter, so a renter cannot present a deposit they
-// made against terms of their own choosing. 32 random bytes: the contract
-// refuses to reopen an existing id, so a collision would be a denial of service
-// rather than a theft, and 256 bits makes it impossible either way.
+// Minted by the node rather than the renter, and unguessable, because it names
+// the session on a public audit topic: a renter who could choose it could
+// collide it with someone else's trail.
 func newSessionID() (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -666,12 +706,4 @@ func secondsToMinutes(seconds int) int {
 		minutes = 1
 	}
 	return minutes
-}
-
-func mustBig(s string) *big.Int {
-	value, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		return big.NewInt(0)
-	}
-	return value
 }

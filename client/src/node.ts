@@ -12,7 +12,6 @@ import type {
   LeaseState,
   NodeSpec,
   SessionCreated,
-  SessionQuote,
   SessionSpec,
   SessionState,
   SettleResponse,
@@ -118,79 +117,57 @@ export class NodeClient {
   }
 
   /**
-   * Asks the node what an escrow session would cost, without paying.
+   * x402-gated: buys the first chunk of a metered session.
    *
-   * The node answers 402 with its terms rather than an x402 challenge, because
-   * there is no transfer for anyone to sign: the renter deposits at the
-   * contract themselves and comes back with the transaction id.
+   * Mechanically identical to createLease — same facilitator, same exact
+   * scheme, same one-call-pays-and-provisions shape. What differs is what the
+   * payment becomes: a lease's buys time that is gone whether it is used or
+   * not, a session's buys credit the node burns down and refunds the remainder
+   * of. The node settles only once the container is up and proven reachable, so
+   * a failure here means nothing was charged.
    */
-  async quoteSession(spec: SessionSpec): Promise<SessionQuote> {
-    const response = await fetch(`${this.baseUrl}/v1/sessions`, {
+  async createSession(
+    payer: Payer,
+    spec: SessionSpec,
+  ): Promise<{ session: SessionCreated; settlement: SettleResponse }> {
+    const { response, settlement } = await payFor(payer, `${this.baseUrl}/v1/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec),
     });
-
-    if (response.status === 404) {
-      throw new Error("this node does not offer escrow-backed sessions");
-    }
-    if (response.status !== 402) {
-      throw new Error(await describeFailure(response, "quoting a session"));
-    }
-
-    const body = (await response.json()) as { quote?: SessionQuote; error?: string };
-    if (!body.quote) {
-      throw new Error(`this node's session quote was malformed: ${body.error ?? "no quote"}`);
-    }
-    return body.quote;
+    return { session: (await response.json()) as SessionCreated, settlement };
   }
 
   /**
-   * Claims a session the renter has already funded on-chain.
+   * x402-gated: buys another chunk of credit on a live session.
    *
-   * The proof is a transaction id, not a signed payload: the deposit is final
-   * on Hedera consensus before this is called, and the node verifies it by
-   * reading the public mirror node.
+   * Unlike extending a lease there is nothing to re-sign: the certificate was
+   * minted for the session and a top-up does not move its expiry by buying a
+   * new slice, it refills the credit behind it.
    */
-  async claimSession(
-    spec: SessionSpec,
+  async topUpSession(
+    payer: Payer,
     sessionId: string,
-    depositTransaction: string,
-  ): Promise<SessionCreated> {
-    const response = await fetch(`${this.baseUrl}/v1/sessions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "PAYMENT-DEPOSIT": depositTransaction,
-        "PAYMENT-SESSION": sessionId,
+    token: string,
+  ): Promise<{ state: SessionState; settlement: SettleResponse }> {
+    const { response, settlement } = await payFor(
+      payer,
+      `${this.baseUrl}/v1/sessions/${sessionId}/topup`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       },
-      body: JSON.stringify(spec),
-    });
-
-    if (!response.ok) {
-      // The deposit is already in the contract at this point, so say what to do
-      // about it rather than only what went wrong.
-      throw new Error(
-        `${await describeFailure(response, "claiming the session")}\n` +
-          `Your deposit is still in the escrow contract; run \`cleargate settle --session ${sessionId}\` to recover it.`,
-      );
-    }
-    return (await response.json()) as SessionCreated;
+    );
+    return { state: (await response.json()) as SessionState, settlement };
   }
 
-  /** Free: tells the node to re-read the contract after an on-chain top-up. */
-  async topUpSession(sessionId: string, token: string): Promise<SessionState> {
-    const response = await fetch(`${this.baseUrl}/v1/sessions/${sessionId}/topup`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      throw new Error(await describeFailure(response, "topping up the session"));
-    }
-    return (await response.json()) as SessionState;
-  }
-
-  /** Free: what the auto-top-up loop polls. */
+  /**
+   * Free: what the auto-top-up loop polls.
+   *
+   * `low_credits` is the field that matters. The node computes it against its
+   * own threshold, which has to clear its sweep interval plus a payment round
+   * trip — numbers a client would only be guessing at.
+   */
   async sessionState(sessionId: string, token: string): Promise<SessionState> {
     return (await this.authorized(`/v1/sessions/${sessionId}`, token).then((r) =>
       r.json(),
@@ -199,8 +176,8 @@ export class NodeClient {
 
   /**
    * Free: ends the session. Unlike stopping a lease, this is what triggers the
-   * refund — the node closes the contract if it can, and the renter's own
-   * `settle` closes it if the node cannot.
+   * refund — the node burns the final seconds, returns whatever credit is left,
+   * and answers with the settled state.
    */
   async stopSession(sessionId: string, token: string): Promise<SessionState> {
     const response = await fetch(`${this.baseUrl}/v1/sessions/${sessionId}/stop`, {

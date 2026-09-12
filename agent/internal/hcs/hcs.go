@@ -25,9 +25,25 @@ import (
 
 // Message kinds.
 const (
-	KindJob            = "job"
-	KindLease          = "lease"
-	KindSessionOpen    = "session_open"
+	KindJob         = "job"
+	KindLease       = "lease"
+	KindSessionOpen = "session_open"
+
+	// KindSessionBurn is the running refund-owed checkpoint, published every
+	// fifteen seconds a metered session is live rather than only when it ends.
+	//
+	// This is the whole reason a metered session is trustworthy. Between paying
+	// for a chunk and being refunded the remainder, the renter's money is in
+	// the provider's hands and nothing but the provider's word says how much of
+	// it is still theirs. A burn checkpoint turns that word into a
+	// consensus-ordered, running-hash-bound public fact, published continuously
+	// and well before anyone has a reason to dispute it — so a provider who
+	// later refuses to refund has already signed the number they are refusing
+	// to honour, over and over, at a time when they had no motive to lie.
+	KindSessionBurn = "session_burn"
+
+	// KindSessionSettled closes the trail: what was earned, what was returned,
+	// and the transaction that returned it.
 	KindSessionSettled = "session_settle"
 )
 
@@ -49,9 +65,14 @@ type AuditMessage struct {
 	Asset          string `json:"asset,omitempty"`
 	Network        string `json:"network,omitempty"`
 
-	// Escrow sessions only: what was deposited and for how long, so a reader
-	// can check the eventual payout against what was promised without trusting
-	// either party's account of it.
+	// Metered sessions only.
+	//
+	// RefundTinybars is the load-bearing field: on a burn checkpoint it is what
+	// the node owes back *right now*, and on the closing record it is what was
+	// actually returned. A reader who sees the two disagree — or who sees a
+	// session end with no closing record after a trail of burn checkpoints —
+	// has everything they need to say so, without trusting either party's
+	// account of it.
 	PricePerSecond string `json:"price_per_second,omitempty"`
 	DurationSecs   int64  `json:"duration_seconds,omitempty"`
 	ElapsedSecs    int64  `json:"elapsed_seconds,omitempty"`
