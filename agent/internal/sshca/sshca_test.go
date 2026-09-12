@@ -137,3 +137,44 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// A renter paying from the website generates their keypair with WebCrypto
+// rather than ssh-keygen, and encodes the OpenSSH public-key blob by hand
+// (client/src/browser/ssh-key.ts). That encoding is four-byte length prefixes
+// around an algorithm name and 32 raw bytes, written from the spec rather than
+// produced by a tool — so this pins the one thing that would break if it were
+// subtly wrong: whether this CA will actually sign what a browser sends.
+//
+// The key below was produced by that browser code path and checked against
+// `ssh-keygen -y` on the private half it was generated with.
+func TestSignAcceptsABrowserGeneratedKey(t *testing.T) {
+	requireSSHKeygen(t)
+
+	const browserKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBW5Zc6yp9Xo94PVXyTs9engwV4J9WsL5NOx4/qSR86B cleargate-lease"
+
+	if err := ValidatePublicKey(browserKey); err != nil {
+		t.Fatalf("a browser-generated key was rejected before payment: %v", err)
+	}
+
+	dir := t.TempDir()
+	ca, err := Ensure(context.Background(), filepath.Join(dir, "ca"), "cleargate-test")
+	if err != nil {
+		t.Fatalf("generate CA: %v", err)
+	}
+
+	cert, err := ca.Sign(context.Background(), "leasebrowser01", browserKey, time.Now().Add(30*time.Minute))
+	if err != nil {
+		t.Fatalf("sign a browser-generated key: %v", err)
+	}
+
+	certPath := filepath.Join(dir, "browser-cert.pub")
+	writeFile(t, certPath, cert+"\n")
+	details := run(t, "ssh-keygen", "-L", "-f", certPath)
+
+	if !strings.Contains(details, "leasebrowser01") {
+		t.Fatalf("certificate should be scoped to the lease principal:\n%s", details)
+	}
+	if !strings.Contains(details, "ED25519") {
+		t.Fatalf("certificate should carry the renter's ed25519 key:\n%s", details)
+	}
+}
