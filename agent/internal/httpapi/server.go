@@ -181,7 +181,10 @@ func (s *Server) Handler() http.Handler {
 	// free. The card an ERC-8004 agent id resolves to — see handleAgentCard.
 	mux.HandleFunc("GET /.well-known/agent-card.json", s.handleAgentCard)
 
-	return s.withLogging(mux)
+	// CORS sits inside the logger so preflights show up in a provider's log the
+	// same as any other request — a renter whose browser is being refused is a
+	// support question, and an invisible OPTIONS makes it unanswerable.
+	return s.withLogging(s.withCORS(mux))
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {

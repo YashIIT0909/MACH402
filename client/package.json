@@ -6,6 +6,10 @@
   "bin": {
     "cleargate": "./bin/cleargate.mjs"
   },
+  "//": "Only the browser entry is exported. The CLI's own modules reach env.ts, which imports dotenv and node:fs at module scope and would break a bundle; keeping the subpath narrow means the website cannot import them by accident.",
+  "exports": {
+    "./browser": "./src/browser/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "cli": "tsx src/cli.ts"

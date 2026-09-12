@@ -102,6 +102,33 @@ type Config struct {
 
 	// DockerHost is the Docker endpoint. Unix socket by default.
 	DockerHost string `yaml:"docker_host"`
+
+	// CORS governs which web origins a browser may call this node from.
+	//
+	// Needed because a renter paying from the ClearGate website is a browser
+	// talking straight to this node — payments are renter -> node, direct
+	// (CLAUDE.md invariant 3), so there is no server in between to relay them.
+	CORS CORS `yaml:"cors"`
+}
+
+// CORS is the browser-origin policy for this node's API.
+//
+// Permissive by default, and that is a considered position rather than a
+// shortcut: every authenticated endpoint here is guarded by a bearer token in a
+// header that the renter was handed at payment time, and *nothing* on this node
+// authenticates with a cookie. Cross-origin access therefore grants a hostile
+// page nothing it could not already do by calling the node from its own server,
+// because there is no ambient authority in a browser for it to borrow. The
+// classic reason to lock CORS down — a logged-in victim's cookies riding along
+// on a forged request — does not exist here.
+//
+// What is never sent is `Access-Control-Allow-Credentials`, which is what would
+// change that answer.
+type CORS struct {
+	// AllowedOrigins is the set of origins permitted to call this node, or
+	// ["*"] for any. A provider who serves their own renter UI can narrow this
+	// to their own site.
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // Hedera configures the node's one indirect route to signing a transaction.
@@ -223,10 +250,31 @@ type Leases struct {
 	// never leased out indefinitely by a renter who keeps topping it up.
 	MaxTotalMinutes int `yaml:"max_total_minutes"`
 
-	// MissedExtensions is how many slices may lapse past expires_at before the
-	// container is frozen. Freezing rather than killing is deliberate: a renter
-	// mid-task who is slow to pay should not lose their work outright.
+	// MissedExtensions is retained so configs written before OverrunSeconds
+	// existed still load. It no longer decides anything.
+	//
+	// It used to set the freeze tolerance to missed_extensions x the slice the
+	// renter bought, which with the shipped default of 2 meant a 60-minute
+	// lease kept the machine for 180 minutes before it was even frozen, and 190
+	// before the container died. That is three times the time sold, given away,
+	// and it read to a provider as the node ignoring its own expiry. See
+	// OverrunSeconds.
 	MissedExtensions int `yaml:"missed_extensions"`
+
+	// OverrunSeconds is how far past expires_at a lease keeps running before it
+	// is frozen.
+	//
+	// Small on purpose. Minutes bought should be minutes delivered: a renter who
+	// buys fifteen gets fifteen, and the provider's machine comes back. The
+	// tolerance exists only to absorb an extension that is paid for but not yet
+	// applied — a wallet prompt the renter is mid-way through approving — not to
+	// hand out free time.
+	//
+	// Freezing rather than killing is still deliberate, and unchanged: the
+	// container is paused, not destroyed, so a renter mid-task who is slow to
+	// pay gets their work back when they extend. GraceMinutes is how long that
+	// frozen state survives before the machine is reclaimed for good.
+	OverrunSeconds int `yaml:"overrun_seconds"`
 
 	// GraceMinutes is how long a frozen lease survives before it is reaped —
 	// container killed, tunnel ingress withdrawn, workspace wiped.
@@ -398,6 +446,23 @@ func Default() Config {
 		},
 		ReceiptsPath: "receipts.jsonl",
 		DockerHost:   "unix:///var/run/docker.sock",
+		CORS:         DefaultCORS(),
+	}
+}
+
+// DefaultCORS allows any origin. See the CORS type for why that is safe here.
+func DefaultCORS() CORS {
+	return CORS{AllowedOrigins: []string{"*"}}
+}
+
+// applyDefaults treats an absent or empty `cors:` block as "unset".
+//
+// An empty allowlist would otherwise mean "no browser may ever call this node",
+// which is a setting nobody asks for by leaving a block out — and it would
+// break the website's rent flow on every node whose config predates it.
+func (c *CORS) applyDefaults() {
+	if len(c.AllowedOrigins) == 0 {
+		c.AllowedOrigins = DefaultCORS().AllowedOrigins
 	}
 }
 
@@ -413,6 +478,7 @@ func DefaultLeases() Leases {
 		MaxMinutes:             120,
 		MaxTotalMinutes:        1440, // one day
 		MissedExtensions:       2,
+		OverrunSeconds:         30,
 		GraceMinutes:           10,
 		CAKeyPath:              "lease-ca",
 		Limits: LeaseLimits{
@@ -496,6 +562,7 @@ func Load(path string) (Config, error) {
 	}
 	cfg.Leases.applyDefaults(filepath.Dir(path))
 	cfg.Hedera.applyDefaults(filepath.Dir(path))
+	cfg.CORS.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
 	}
@@ -529,6 +596,12 @@ func (l *Leases) applyDefaults(configDir string) {
 	}
 	if l.MissedExtensions <= 0 {
 		l.MissedExtensions = fallback.MissedExtensions
+	}
+	// A config written before this existed has it at zero, which would freeze a
+	// renter the instant their clock ran out with no room for an in-flight
+	// extension. Treat absent as unset, not as "no tolerance at all".
+	if l.OverrunSeconds <= 0 {
+		l.OverrunSeconds = fallback.OverrunSeconds
 	}
 	if l.GraceMinutes <= 0 {
 		l.GraceMinutes = fallback.GraceMinutes
