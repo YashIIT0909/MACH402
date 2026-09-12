@@ -22,6 +22,21 @@ cleargate-node.log
 *.tar
 artifacts/
 
+# the node's SSH certificate authority and its Hedera operator key.
+#
+# The only key material this project ever writes to a provider's disk. The
+# operator key file is the one thing that can spend the node's fee float and
+# holds its ERC-8004 identity, so it must never reach a commit.
+lease-ca
+lease-ca.pub
+hedera-operator
+cloudflared/
+
+# hardhat build output. deployments/ is deliberately NOT ignored: which
+# contract is live is a fact the repo should record, not a local artifact.
+contracts/cache/
+contracts/typechain-types/
+
 # 3d source assets — the 12 MB Sketchfab original is the authoring copy.
 # What the site serves is the compressed build of it in web/public/models,
 # which is tracked. Keeps a one-off binary out of history forever.

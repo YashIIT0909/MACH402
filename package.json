@@ -14,12 +14,15 @@
     "typescript": "5.9.3",
     "tsx": "4.23.13",
     "@types/node": "22.20.2",
-    "@cleargate/client": "workspace:*"
+    "@cleargate/client": "workspace:*",
+    "@cleargate/hederakit": "workspace:*"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "protobufjs"
+      "keccak",
+      "protobufjs",
+      "secp256k1"
     ]
   }
 }

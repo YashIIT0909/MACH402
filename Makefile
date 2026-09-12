@@ -31,7 +31,8 @@ LEASE_BASE_IMAGE ?= $(shell docker info --format '{{if index .Runtimes "nvidia"}
 LEASE_EXTRA_PIP  ?=
 
 .PHONY: help install smoke smoke-agent supported agent lease-image dev-node dev-tui cli dev-client \
-        registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean
+        registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean \
+        contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -80,6 +81,24 @@ dev-registry-sample: ## serve fixture nodes on :4400 for website work — no Pos
 
 dev-web: ## run the website on :3000
 	pnpm --filter @cleargate/web run dev
+
+contracts: ## compile the Solidity contracts
+	pnpm --filter @cleargate/contracts run build
+
+contracts-test: ## unit-test the escrow and identity contracts (in-process EVM, no network, no HBAR)
+	pnpm --filter @cleargate/contracts run test
+
+contracts-deploy: ## deploy SessionEscrow and IdentityRegistry to Hedera testnet
+	pnpm --filter @cleargate/contracts run deploy
+
+contracts-demo: ## prove the refund end to end against the live contract, with no node involved
+	pnpm --filter @cleargate/contracts run demo
+
+escrow-selectors: ## regenerate the function selectors the Go agent carries as constants
+	pnpm --filter @cleargate/contracts run selectors
+
+node-register: agent ## register this node's ERC-8004 provider identity
+	./$(BIN) register
 
 typecheck: ## typecheck every TS package
 	pnpm -r typecheck

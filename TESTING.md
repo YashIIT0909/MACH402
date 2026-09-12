@@ -511,6 +511,156 @@ staging and the artifact path. That keeps the demo runnable when no dataset URL 
 **On 4 GB of VRAM**, the default batch of 128 fits comfortably. A CUDA OOM is caught and reported
 with the batch size to retry at, rather than as a stack trace.
 
+## 12. Escrow sessions and the audit trail — **costs a few tinybars per run**
+
+Everything here is testnet money and the point of the section is that most of it
+comes back. Run the steps in order; each one builds on the last.
+
+### 12a. The contract math, free and offline
+
+```
+make contracts-test
+```
+
+**Pass:** 33 passing. No network, no HBAR, no credentials — Hardhat's in-process
+EVM. If this fails, nothing below is worth running.
+
+### 12b. Deploy, free of judgement but **costs about 2 HBAR of gas**
+
+```
+make contracts-deploy
+```
+
+**Pass:** two addresses and two HashScan links, written to
+`contracts/deployments/hederaTestnet.json`.
+
+### 12c. The refund, proven without a node — **costs about 0.004 HBAR**, most refunded
+
+```
+make contracts-demo
+```
+
+Opens a session, tops it up, waits 20 seconds, and settles early.
+
+**Pass:** a `PASS` line saying the provider was paid for the seconds actually
+elapsed and the rest went back. If the provider received the full deposit, the
+refund did not happen and the run fails loudly rather than quietly passing.
+
+This is the step that proves the mechanism. Everything after it is plumbing.
+
+### 12d. A provider's operator key and audit topic — **costs about 1 HBAR to fund**
+
+```
+cleargate-node setup --enable-leases --enable-hcs \
+  --enable-escrow --escrow-contract 0x<SessionEscrow> \
+  --identity-contract 0x<IdentityRegistry> --self-settle
+```
+
+**Pass on the first run:** setup prints the operator key's EVM address and says
+it has no account yet. That is not a failure — an ECDSA key has an address from
+birth, but no Hedera account exists until someone funds it. Send it a few HBAR
+and run setup again:
+
+```
+FUND_ADDRESS=0x<the address setup printed> FUND_HBAR=20 \
+  pnpm --filter @cleargate/contracts exec hardhat run scripts/fund.ts --network hederaTestnet
+```
+
+(A real provider would use the Hedera portal or a faucet; this just saves a
+manual step while testing.)
+
+**Pass on the second run:** an account id, a balance, the escrow contract, the
+address `pay_to` resolves to, and a topic id with a HashScan link.
+
+Two things setup refuses, and both are worth checking deliberately: a `pay_to`
+with `receiverSigRequired` set, and one with no EVM address. Neither can be paid
+by a contract, and discovering that at payout time would strand a session.
+
+### 12e. Identity, and that it is safely re-runnable — **costs about 0.5 HBAR once**
+
+```
+make node-register
+make node-register
+```
+
+**Pass:** the first run prints `registered  agent N`; the second prints
+`confirmed   agent N (already registered)` with the **same** N and sends no new
+registration. Registering twice would orphan the first id, so this is the
+property that matters, not the first run.
+
+Then:
+
+```
+curl -s http://localhost:8402/.well-known/agent-card.json | jq .registrations
+```
+
+**Pass:** the agent id, the address it is bound to, and the registry that issued
+it. This is what the on-chain record resolves to.
+
+### 12f. A real session, stopped early — **costs about 0.004 HBAR, most refunded**
+
+Terminal A runs the node. In terminal B:
+
+```
+make cli ARGS="session -n http://localhost:8402 -m 5"
+```
+
+**Pass:** a deposit transaction, then SSH and Jupyter details, then auto-top-up
+as the time runs low. Ctrl-C after a minute or two.
+
+**Pass on exit:** a line reading `settled: Ns used, X to the provider, Y refunded
+to you` — and Y should be most of it. That difference is the entire feature.
+
+**Check it on-chain**, not just in our own output:
+
+```
+curl -s "https://testnet.mirrornode.hedera.com/api/v1/topics/<topic>/messages?order=desc&limit=4" \
+  | jq -r '.messages[] | .message | @base64d'
+```
+
+**Pass:** a `session_open` and a `session_settle` for the same `session_id`,
+with `elapsed_seconds` and `refund_tinybars` matching what the CLI printed. The
+open record is what makes the settle record checkable by a stranger: together
+they say what was promised and what was paid, and neither party wrote them
+anywhere they could later edit.
+
+### 12g. The renter vanishes — **costs about 0.002 HBAR, none refunded, and that is correct**
+
+Start a short session and kill the client without letting it exit cleanly:
+
+```
+make cli ARGS="session -n http://localhost:8402 -m 1 --no-top-up"
+```
+
+Then wait out the paid minute plus the node's grace period.
+
+**Pass:** the node's log shows the container frozen, then reaped, then
+`session settled on-chain`. The provider is paid the full deposit, because
+`elapsed` is capped at the duration that was actually bought — there is nothing
+left to refund, and the renter got the minute they paid for.
+
+**Pass with `self_settle: false`** instead: the node logs
+`session finished and is not settled on-chain; anyone may call settle` with the
+session id. Nothing is lost — the money is in the contract — and either side can
+close it:
+
+```
+make cli ARGS="settle -n http://localhost:8402 -s 0x<session>"
+```
+
+### 12h. Direct mode still works — free, and non-negotiable
+
+```
+make smoke
+make smoke-agent
+```
+
+**Pass:** both green. Escrow is added behind `leases.payment_mode`, and a node
+that never opted in must behave exactly as it did before any of this existed. If
+either of these fails, the change is wrong.
+
+---
+
 ## 11. Nothing leaked — free
 
 Stop the node in terminal A (Ctrl-C), then:

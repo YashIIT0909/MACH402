@@ -4,8 +4,9 @@ A GPU rental marketplace settled with [x402](https://docs.hedera.com/solutions/a
 Hedera. Providers run a daemon on an idle GPU; renters — people at a terminal or autonomous agents —
 pay that node directly, per job, and get a container run on it.
 
-No API keys. No subscriptions. No escrow. The renter pays the machine that does the work, and the
-payment settles on Hedera in under a second.
+No API keys. No subscriptions. No custody. The renter pays the machine that does the work, and the
+payment settles on Hedera in under a second — or, for interactive time, goes into a contract that
+refunds whatever they do not use.
 
 Built for the *AI & Agentic Payments on Hedera* track. **Testnet only.**
 
@@ -46,7 +47,22 @@ And the metered half of **M3**, **interactive leases** — the other way to buy 
 - **Freeze, then reap.** Missed extensions freeze the container rather than killing it, so a renter
   who is mid-run and slow to pay does not lose their work.
 
-The rent-from-the-website flow and HCS receipts (M4–M5) are not built yet.
+And **M4** — the parts that make this a marketplace an agent can use rather than only a person:
+
+- **Escrow-backed sessions** (`POST /v1/sessions`): pay by the second into a Hedera smart contract
+  instead of forward to the provider. Stop early and the contract pays the provider for the seconds
+  you actually used and **refunds the rest** — computed by code neither party controls. `settle` is
+  permissionless, so your refund never depends on the provider cooperating.
+- **An HCS audit trail**: every settlement is published to a Hedera Consensus Service topic the
+  provider owns, so earnings can be audited without trusting this project's website — or the
+  provider's own node.
+- **ERC-8004 provider identity**: `cleargate-node register` gives a provider a persistent on-chain
+  agent id, and the node serves its own agent card at `/.well-known/agent-card.json`. A renting
+  agent can resolve and check a provider without going through our registry at all.
+- **`GET /v1/providers`**: the same listings under the names an autonomous renter looks for, carrying
+  the agent id, derived capabilities and per-second pricing.
+
+The rent-from-the-website flow is not built yet — paying still happens from the CLI.
 
 ---
 

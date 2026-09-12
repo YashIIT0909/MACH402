@@ -18,6 +18,9 @@ Built for the "AI & Agentic Payments on Hedera" hackathon track. Testnet only.
 ## Hard invariants — violating any of these is a bug, not a style choice
 
 1. **The agent never holds a private key** and never imports a Hedera SDK. The merchant side of x402 needs only JSON construction and HTTP calls to the facilitator. If you find yourself adding a Hedera SDK to `agent/`, stop.
+   - **The sidecar is the one sanctioned way around this, and it is not an exception to the rule — it is how the rule is kept.** Publishing an HCS receipt and registering an ERC-8004 identity both need a signed Hedera transaction, and the Go binary still links no SDK and reads no key: it runs `cleargate-hedera` (the `hederakit/` package) as a child process and reads JSON back. This is the same move `internal/sshca` makes with `ssh-keygen` and `internal/tunnel` makes with `cloudflared`. `agent/internal/hedera` is that wrapper; adding a Hedera SDK to `go.mod` is still the thing not to do.
+   - The key that sidecar reads is **node-local, opt-in, and is not `pay_to`.** `pay_to` holds a provider's earnings and signs nothing, ever. The operator key holds a few HBAR of fee float and signs topic submissions, ERC-8004 registration, and — only with `leases.self_settle` — `SessionEscrow.settle`. Do not describe it as a zero-value key: it pays gas, so it can spend. The honest claim is that a compromise costs the float and cannot touch earnings.
+   - **Verifying a payment needs no key at all.** `agent/internal/mirror` and `agent/internal/escrow` read Hedera's public mirror node over plain HTTP. That is what lets escrow sessions exist in Go without breaking this invariant, and it is why the escrow path has no facilitator: a contract call the renter signed and submitted is already final on consensus, so there is nothing for a third party to co-sign.
 2. **All payment signing lives in `client/`** using `@x402/hedera`. TypeScript only. There is no reference implementation of the Hedera exact scheme in Go; hand-rolling frozen `TransferTransaction` bytes is out of scope.
 3. **The registry never receives, holds, or forwards funds.** Payments are renter → node, direct. Marketplace commission, if any, is an HTS fractional custom fee applied by the network — never a code path.
 4. **Verify before work, settle immediately after accepting work.** Never start a container on an unverified payment; never wait for job completion to settle (the signed payload expires at `maxTimeoutSeconds`, 300s).
@@ -46,7 +49,13 @@ agent/       Go — cleargate-node binary: x402 resource server, docker runner, 
   internal/sshca/       the node's own SSH CA: per-lease certificates, private key never leaves
   internal/tunnel/      cloudflared supervision — how a renter reaches a lease through NAT
   lease-image/          the lease runtime (sshd + Jupyter) and its deny-by-default egress proxy
-client/      TS — payFor() 402 wrapper, cleargate CLI, budgeting agent (M4)
+  internal/mirror/      Hedera's public mirror node, read-only — how a deposit is verified without a key
+  internal/escrow/      the on-chain session record, decoded; the escrow path's answer to /verify
+  internal/hedera/      runs the signing sidecar as a child process; links no SDK
+  internal/hcs/         publishes settlements to the provider's own audit topic
+client/      TS — payFor() 402 wrapper, escrow contract calls, cleargate CLI
+contracts/   Solidity — SessionEscrow (refundable sessions) and IdentityRegistry (ERC-8004), Hardhat
+hederakit/   TS — cleargate-hedera, the sidecar the node shells out to; the only thing holding a provider key
 registry/    TS — Fastify + Postgres, node heartbeats, discovery (M2), tunnel provisioning
 web/         Next.js — provider signup and node browsing (M2); rent flow still to come
 packages/    shared TS types (payment requirements, node specs, job specs, lease specs)
@@ -163,6 +172,11 @@ make dev-web        # run the website on :3000
 make cli ARGS="…"   # the renter CLI from the repo root
 make test           # go tests, including real-Docker sandbox tests
 make typecheck      # typecheck every TS package
+make contracts-test # unit-test SessionEscrow and IdentityRegistry — in-process EVM, no network, no HBAR
+make contracts-deploy   # deploy both contracts to Hedera testnet
+make contracts-demo     # prove the refund end to end against the live contract, with no node involved
+make escrow-selectors   # regenerate the function selectors agent/internal/escrow carries as constants
+make node-register      # register this node's ERC-8004 provider identity
 ```
 
 The dashboard (`cleargate-node tui`) is a **view** over the same runner and server `serve` uses. It
@@ -201,8 +215,9 @@ node in V1.
   after that reaps: container killed, tunnel ingress withdrawn, workspace wiped.
 - **Extending buys a slice and re-signs.** `POST /v1/leases/:id/extend` is 402-gated the same way
   and issues a new certificate with the later expiry; the old one lapses on its own.
-- **Stopping does not refund.** Forward payment is what makes escrow unnecessary. What stopping does
-  is end the meter, which is what the renter actually wants and what frees the node for the next one.
+- **Stopping does not refund — in `direct` mode.** Forward payment is what removes the need for
+  escrow there. What stopping does is end the meter, which is what the renter actually wants and what
+  frees the node for the next one. A node selling `escrow` sessions behaves differently; see below.
 - **The renter's `--budget` is enforced client-side**, in `holdLease`, and is a different mechanism
   from the node's freeze/reap timers: one protects the renter from overspending, the other protects
   the provider from an unpaid container.
@@ -227,6 +242,73 @@ never have a Cloudflare account; `POST /v1/nodes/:id/tunnel-token` provisions on
 returns a token good for running that one tunnel. A registry without those variables is still a fine
 registry — it just answers 503 there and nodes fall back to quick tunnels.
 
+## The session lifecycle — escrow-backed interactive time
+
+A session is a lease paid for through a contract instead of forward. Same container, same
+certificate, same freeze-and-reap; the only difference is what happens to the money, and that
+difference is the point. `leases.payment_mode` selects it, `direct` stays the default, and a node
+that never opted in answers 404 on `/v1/sessions`.
+
+- **The renter deposits first, and the node verifies afterwards.** The inverse of the x402 order,
+  and correct here: a `ContractExecuteTransaction` the renter signs and submits themselves is final
+  on consensus the moment it succeeds, so there is nothing for a facilitator to co-sign and no
+  signed payload that can expire. `POST /v1/sessions` answers 402 with a quote, the renter calls
+  `openSession`, and comes back with the transaction id in `PAYMENT-DEPOSIT`.
+- **The node checks the contract's storage, not the renter's claim.** `agent/internal/escrow`
+  compares the on-chain session against the quote *this node issued* — provider address, price,
+  minimum duration — the same rule `s.requirements` follows for x402. A renter controls every
+  argument they encode; the only thing they cannot forge is what the contract actually stored.
+- **`settle` is permissionless and one-shot.** Anyone may call it, which is safe because calling it
+  early only ever produces a smaller `elapsed`: the provider gains nothing by rushing it, and the
+  renter has every reason to call it the moment they stop. That is why no keeper has to be trusted
+  or funded, and why a renter whose provider vanished is never stuck.
+- **A failed payout must never brick a session.** `_pay` credits `pendingWithdrawal` instead of
+  reverting. Reverting would make a one-shot `settle` permanently impossible for an immutable
+  contract and would strand *the renter's refund* over the provider's account settings. Do not
+  "simplify" this back to `require(success)`.
+- **`msg.value` inside the Hedera EVM is TINYBARS, not weibars.** The JSON-RPC relay divides by
+  10^10 before the contract sees it. Measured, not assumed. `SessionEscrow` therefore does no unit
+  conversion anywhere; a JSON-RPC caller multiplies on the way in, an SDK caller does not.
+- **Resolve `pay_to`'s EVM address from the mirror node; never compute it.** The obvious long-zero
+  form (`0x` + the padded account number) is accepted as an address and a contract's HBAR transfer
+  to it *fails* for any account with an EVM alias — which is every account the portal issues.
+  Measured on testnet.
+- **Expiry reuses the existing 15-second sweep**, not new timers. `sweepLeases` already notices when
+  paid time runs out; sessions add an arm to it. There are no `time.AfterFunc` timers in this
+  codebase and adding some would mean two schedulers for one event.
+- **Settle with the lease you already hold, never by looking it up again.** `StopLease` releases the
+  node's single lease slot, so after a reap `runner.ActiveLease()` returns nothing — a re-lookup
+  finds no session and silently settles none, leaving the provider's own earnings in the contract.
+- **Every mirror-node read of a fresh transaction needs a bounded retry.** Ingestion lags seconds
+  behind consensus, so reading once rejects payments that have already happened. Both `AwaitDeposit`
+  and `AwaitTopUp` exist for this; a new on-chain check needs the same treatment.
+- **The mirror node's REST path wants `0.0.x-sss-nnnnnnnnn`**, not the `0.0.x@sss.nnn` form the SDK
+  and every log line produce, with nanos padded to nine digits. `mirror.normalizeTransactionID`
+  handles it; passing the familiar form through gets a 400 at the moment a renter's money is already
+  in the contract.
+
+## Provider identity — ERC-8004
+
+A provider registers once with `cleargate-node register` and gets a persistent `agentId`. That id
+answers "who is this provider", and deliberately nothing else: GPU, price and availability change
+every thirty seconds and live in the registry, where they cost nothing to update.
+
+- **Registration is explicit, and `serve` never does it.** An identity that appeared as a side
+  effect of starting a daemon would be a claim nobody chose to make, and it is the only command
+  that spends a provider's HBAR.
+- **It is idempotent at two levels — config and chain.** `register` checks `identity.agent_id`, and
+  the contract's `agentIdOf` is checked before minting. A provider who lost their `config.yaml`
+  recovers their id instead of silently acquiring a second one and orphaning the first.
+- **`newAgent` binds to `msg.sender`.** ClearGate cannot mint an identity for a provider, move one,
+  or revoke one. That is the only reason it is worth being on-chain rather than another column in
+  our Postgres — and it is why the registry records an agent id without pretending to verify it.
+- **`agentDomain` is the host of `public_url`, and the node serves the card there** at
+  `GET /.well-known/agent-card.json`, free and unauthenticated. The resolution path is id → domain →
+  a card the provider serves themselves; our registry appears nowhere in it. The card is rendered
+  from `nodespec.Spec`, so it cannot disagree with `/v1/specs` or the heartbeat.
+- **Capabilities are derived, never stored.** `cuda`/`ssh`/`jupyter`/`escrow` come from what the node
+  already advertises. A stored copy would be a second thing to keep in step with the first.
+
 ## Conventions
 
 - Go: standard layout, `internal/` for everything non-exported, errors wrapped with context, no panics in request paths.
@@ -245,7 +327,18 @@ registry — it just answers 503 there and nodes fall back to quick tunnels.
 
 ## Deliberately out of scope
 
-Mainnet. Escrow and refunds (streamed forward-payment removes the need). Multi-GPU partitioning. Arbitrary user-supplied images. Reputation and slashing. Fiat on-ramp. Windows providers.
+Mainnet. Multi-GPU partitioning. Arbitrary user-supplied images. Reputation and slashing. Fiat
+on-ramp. Windows providers.
+
+**No registry keeper.** The registry holds no Hedera key and runs no background work, so nothing
+automatically closes a session whose renter force-quit mid-grace. It does not need to: `settle` is
+permissionless, the renter's CLI calls it on exit, and a provider who wants their payout without
+waiting sets `leases.self_settle`. Adding a keeper would give the registry its first key and its
+first worker to solve a problem two existing mechanisms already cover.
+
+**Escrow is no longer out of scope** — it was, on the grounds that streamed forward payment removed
+the need, which was true for the provider and false for the renter. It now applies to the session
+path only; the flat-fee job path keeps its direct-transfer x402 flow unchanged.
 
 ## Reference
 

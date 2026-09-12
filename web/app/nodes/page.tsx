@@ -201,6 +201,7 @@ function NodeCard({ node }: { node: NodeListing }) {
         <Row label="Paid to">
           <span className="font-mono text-sm">{node.pay_to}</span>
         </Row>
+        <Identity node={node} />
         <Row label="Seen">
           <Sub flush>
             {new Date(node.last_seen_at).toLocaleTimeString()} · agent {node.agent_version}
@@ -208,6 +209,42 @@ function NodeCard({ node }: { node: NodeListing }) {
         </Row>
       </dl>
     </div>
+  );
+}
+
+/**
+ * This provider's on-chain identity, if they registered one.
+ *
+ * Rendered as a link to the registry contract rather than as a bare number,
+ * because the number on its own is not checkable — the point of the id is that
+ * a visitor can go and verify it somewhere that is not this website.
+ *
+ * Absent for an unregistered node, which is normal: registration costs a
+ * transaction and is opt-in, so showing "not registered" would read as a defect
+ * rather than as a choice.
+ */
+function Identity({ node }: { node: NodeListing }) {
+  if (node.agent_id === undefined || node.agent_id === 0) return null;
+
+  const registry = node.identity_registry;
+  const label = `Agent ${node.agent_id}`;
+
+  return (
+    <Row label="Identity">
+      {registry === undefined ? (
+        <span className="font-mono text-sm">{label}</span>
+      ) : (
+        <a
+          className="font-mono text-sm underline underline-offset-4 hover:no-underline"
+          href={`https://hashscan.io/testnet/contract/${registry}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {label} ↗
+        </a>
+      )}
+      <Sub flush>ERC-8004, verifiable without trusting this site</Sub>
+    </Row>
   );
 }
 
