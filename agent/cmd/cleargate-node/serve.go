@@ -107,16 +107,23 @@ func startLeasing(ctx context.Context, cfg *config.Config, configPath string, lo
 }
 
 // announce starts publishing heartbeats to the registry, if this node is
-// configured to be listed, and returns the function that stops them.
+// configured to be listed, and returns the function that stops them plus a way
+// to read how those beats are going.
 //
 // Failures are logged and otherwise ignored: discovery is a convenience, and a
 // registry that is down must never keep a paid node from working. The returned
 // stop function waits for the node to withdraw its listing, so a provider who
 // presses ctrl-c is off the website by the time their shell prompt returns.
-func announce(parent context.Context, cfg config.Config, server *httpapi.Server, log *slog.Logger) func() {
+//
+// The status function exists because "logged and otherwise ignored" is the
+// right behaviour for the daemon and the wrong one for a provider watching the
+// dashboard: being invisible on the website is exactly the failure they would
+// want to see, and it is silent everywhere else.
+func announce(parent context.Context, cfg config.Config, server *httpapi.Server, log *slog.Logger) (func(), func() registry.Status) {
 	if cfg.RegistryURL == "" {
 		log.Info("not listed on a registry; renters can still pay this node directly")
-		return func() {}
+		unlisted := registry.Status{}
+		return func() {}, func() registry.Status { return unlisted }
 	}
 
 	log.Info("announcing to registry", "registry", cfg.RegistryURL, "public_url", cfg.PublicURL)
@@ -136,5 +143,5 @@ func announce(parent context.Context, cfg config.Config, server *httpapi.Server,
 	return func() {
 		cancel()
 		<-done
-	}
+	}, announcer.Status
 }

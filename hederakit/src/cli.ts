@@ -25,6 +25,7 @@ import { hederaClient, resolveOperator } from "./client.js";
 import { lookupAccount } from "./mirror.js";
 import { createTopic, publish } from "./hcs.js";
 import { agentIdOf, newAgent, settleSession, updateAgent } from "./contract.js";
+import { sendHbar } from "./transfer.js";
 
 interface GlobalOptions {
     keyFile: string;
@@ -208,6 +209,41 @@ program
                 agent_address: operator.evmAddress,
                 transaction,
                 created: true,
+            });
+        } catch (error) {
+            fail(error);
+        }
+    });
+
+/**
+ * Returns a metered session's unburned credit to the renter who paid it.
+ *
+ * The recipient is not a flag the renter controls: the node passes the payer
+ * the facilitator confirmed for the chunk, so a refund can only ever go back
+ * where the money came from.
+ */
+program
+    .command("refund")
+    .description("send HBAR from the operator account back to a session's payer")
+    .requiredOption("--to <accountId>", "the account to refund")
+    .requiredOption("--tinybars <amount>", "how much to send, in tinybars")
+    .option("--memo <memo>", "transaction memo, normally the session id", "")
+    .action(async (opts: { to: string; tinybars: string; memo: string }) => {
+        const options = program.opts<GlobalOptions>();
+        try {
+            const { operator, client } = await connect(options);
+            const result = await sendHbar(
+                client,
+                operator.accountId,
+                opts.to,
+                opts.tinybars,
+                opts.memo,
+            );
+            client.close();
+            emit({
+                transaction: result.transaction,
+                amount_tinybars: result.amountTinybars,
+                to: opts.to,
             });
         } catch (error) {
             fail(error);

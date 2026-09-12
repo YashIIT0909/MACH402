@@ -29,6 +29,13 @@ const (
 	EventLeaseExtended EventKind = "lease_extended"
 	EventLeasePaused   EventKind = "lease_paused"
 	EventLeaseEnded    EventKind = "lease_ended"
+
+	// EventSessionBurn fires on every meter tick of a live metered session —
+	// the same fact that gets published to the provider's HCS audit topic,
+	// mirrored onto the dashboard so a provider watching locally does not have
+	// to go read their own topic on a mirror node to see what is happening to
+	// a session running right now.
+	EventSessionBurn EventKind = "session_burn"
 )
 
 // Event is one line for the provider's dashboard.

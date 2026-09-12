@@ -46,7 +46,12 @@ export type ProviderView = {
      * the remainder — a real difference an agent should price in.
      */
     refundable: boolean;
-    escrow_contract: string | null;
+    /**
+     * The most time one session payment buys, in seconds — and so the cap on
+     * how much of a renter's money a provider ever holds ahead of the compute.
+     * Null on a node that does not sell metered sessions.
+     */
+    chunk_seconds: number | null;
   };
 
   endpoint: {
@@ -75,7 +80,7 @@ function capabilitiesOf(node: NodeListing): string[] {
   if (node.leases !== undefined) {
     if (node.leases.ssh) capabilities.push("ssh");
     if (node.leases.jupyter) capabilities.push("jupyter");
-    if (node.leases.escrow_contract !== undefined) capabilities.push("escrow");
+    if (node.leases.payment_mode === "session") capabilities.push("refundable");
   }
   if (node.audit_topic !== undefined) capabilities.push("hcs-audit");
   return capabilities;
@@ -96,7 +101,7 @@ function statusOf(node: NodeListing): ProviderView["status"] {
 
 export function toProviderView(node: NodeListing): ProviderView {
   const perSecond = node.leases?.price_tinybars_per_second ?? null;
-  const escrowContract = node.leases?.escrow_contract ?? null;
+  const metered = node.leases?.payment_mode === "session";
   const model = node.gpu.model ?? null;
 
   return {
@@ -123,8 +128,8 @@ export function toProviderView(node: NodeListing): ProviderView {
     pricing: {
       per_job_tinybars: node.price_tinybars,
       per_second_tinybars: perSecond,
-      refundable: escrowContract !== null,
-      escrow_contract: escrowContract,
+      refundable: metered,
+      chunk_seconds: metered ? (node.leases?.chunk_seconds ?? null) : null,
     },
 
     endpoint: {

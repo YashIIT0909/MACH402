@@ -81,10 +81,10 @@ type cardPayments struct {
 	Network string `json:"network"`
 	Asset   string `json:"asset"`
 	PayTo   string `json:"payTo"`
-	// EscrowContract is present only on a node selling refundable sessions. Its
-	// absence is meaningful: it tells an agent this node's interactive time is
-	// forward-paid and non-refundable.
-	EscrowContract string `json:"escrowContract,omitempty"`
+	// Refundable is true only on a node selling metered sessions, where the
+	// unburned remainder of a paid chunk comes back. False means this node's
+	// interactive time is forward-paid and keeping it is the renter's problem.
+	Refundable bool `json:"refundable,omitempty"`
 	// AuditTopic lets a paying agent check a provider's settlement history
 	// before trusting them with money, not only afterwards.
 	AuditTopic string `json:"auditTopic,omitempty"`
@@ -135,8 +135,8 @@ func (s *Server) agentCardFrom(spec nodespec.Spec) agentCard {
 		},
 	}
 
-	if s.cfg.Leases.Enabled && s.cfg.Leases.PaymentMode == config.PaymentEscrow {
-		card.Payments.EscrowContract = s.cfg.Leases.EscrowContractID
+	if s.cfg.Leases.Enabled && s.cfg.Leases.PaymentMode == config.PaymentSession {
+		card.Payments.Refundable = true
 	}
 
 	if spec.AgentID != 0 {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"os"
 	"time"
@@ -57,13 +56,24 @@ func runTUI(parent context.Context, configPath string) error {
 	}
 	defer n.stop()
 
-	cfg, run, server := n.cfg, n.runner, n.server
-
 	// Seed the dashboard from the receipt log so a restart does not appear to
-	// reset the provider's earnings.
-	earned, settlements := priorEarnings(cfg.ReceiptsPath)
+	// reset the provider's earnings, and so it can answer "what did I make
+	// today" rather than only "what have I made since you started looking".
+	history, err := receipts.Open(n.cfg.ReceiptsPath).All()
+	if err != nil {
+		log.Warn("could not read the receipt log; the dashboard will start from zero",
+			"path", n.cfg.ReceiptsPath, "error", err)
+	}
 
-	model := tui.New(cfg, run, server, version, earned, settlements)
+	server := n.server
+	model := tui.New(tui.Options{
+		Config:         n.cfg,
+		Runner:         n.runner,
+		Server:         server,
+		Version:        version,
+		Receipts:       history,
+		RegistryStatus: n.registryStatus,
+	})
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 	model.Attach(program)
 
@@ -95,21 +105,3 @@ func runTUI(parent context.Context, configPath string) error {
 	return nil
 }
 
-// priorEarnings totals what this node has already been paid, so the dashboard
-// opens with the truth rather than with zero.
-func priorEarnings(path string) (int64, int) {
-	all, err := receipts.Open(path).All()
-	if err != nil {
-		return 0, 0
-	}
-	total := new(big.Int)
-	for _, receipt := range all {
-		if amount, ok := new(big.Int).SetString(receipt.AmountTinybars, 10); ok {
-			total.Add(total, amount)
-		}
-	}
-	if !total.IsInt64() {
-		return 0, len(all)
-	}
-	return total.Int64(), len(all)
-}

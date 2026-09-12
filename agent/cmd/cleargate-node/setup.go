@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +19,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
+	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
 	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
@@ -43,10 +46,10 @@ func newSetupCommand() *cobra.Command {
 			opts.leasePrice, _ = cmd.Flags().GetString("lease-price-tinybars-per-minute")
 			opts.tunnelMode, _ = cmd.Flags().GetString("tunnel-mode")
 			opts.hcs, _ = cmd.Flags().GetBool("enable-hcs")
-			opts.escrow, _ = cmd.Flags().GetBool("enable-escrow")
-			opts.escrowContract, _ = cmd.Flags().GetString("escrow-contract")
+			opts.sessions, _ = cmd.Flags().GetBool("enable-sessions")
 			opts.identityContract, _ = cmd.Flags().GetString("identity-contract")
 			opts.selfSettle, _ = cmd.Flags().GetBool("self-settle")
+			opts.hederaSidecar, _ = cmd.Flags().GetString("hedera-sidecar")
 			return setup(cmd.Context(), opts)
 		},
 	}
@@ -70,14 +73,20 @@ func newSetupCommand() *cobra.Command {
 	// why they are explicit flags rather than implied by anything else.
 	cmd.Flags().Bool("enable-hcs", false,
 		"publish every settlement to a Hedera Consensus Service topic you own, so earnings can be audited without trusting us")
-	cmd.Flags().Bool("enable-escrow", false,
-		"sell interactive time through the escrow contract, so a renter who stops early is refunded (implies --enable-hcs machinery)")
-	cmd.Flags().String("escrow-contract", "",
-		"SessionEscrow contract id or EVM address (required with --enable-escrow)")
+	cmd.Flags().Bool("enable-sessions", false,
+		"sell interactive time as a metered credit, refunding whatever a renter does not burn (requires --enable-hcs)")
 	cmd.Flags().String("identity-contract", "",
 		"IdentityRegistry contract for `cleargate-node register`")
 	cmd.Flags().Bool("self-settle", false,
-		"close expired sessions on-chain yourself instead of waiting for the renter to do it")
+		"pay session refunds from this node's operator account automatically, instead of leaving them to be paid by hand")
+	// A bare command name is resolved against the invoking shell's PATH every
+	// time the node starts — fine for a developer's own terminal, fragile for
+	// anything unattended (a systemd unit, a fresh terminal that never sourced
+	// the shell profile again). Persisting an absolute path here removes that
+	// dependency for the life of this config, which is what the installer uses
+	// this for: it knows exactly where it just put the binary.
+	cmd.Flags().String("hedera-sidecar", "",
+		"absolute path to the cleargate-hedera binary, instead of resolving it from PATH at every startup")
 	cmd.Flags().Bool("force", false, "overwrite an existing config")
 	return cmd
 }
@@ -97,10 +106,10 @@ type setupOptions struct {
 	tunnelMode  string
 
 	hcs              bool
-	escrow           bool
-	escrowContract   string
+	sessions         bool
 	identityContract string
 	selfSettle       bool
+	hederaSidecar    string
 }
 
 func setup(ctx context.Context, opts setupOptions) error {
@@ -122,21 +131,28 @@ func setup(ctx context.Context, opts setupOptions) error {
 		cfg.Leases.Tunnel.Mode = strings.TrimSpace(opts.tunnelMode)
 	}
 
-	// Escrow needs the sidecar to verify deposits and, optionally, to settle;
-	// HCS needs it to publish. Either implies the Hedera block is on, so a
-	// provider does not have to know that and pass a third flag.
-	cfg.Hedera.Enabled = opts.hcs || opts.escrow
+	// Sessions need the sidecar to publish the refund-owed trail and, with
+	// --self-settle, to pay the refund; HCS needs it to publish at all. Either
+	// implies the Hedera block is on, so a provider does not have to know that
+	// and pass a third flag.
+	cfg.Hedera.Enabled = opts.hcs || opts.sessions
 	cfg.HCS.Enabled = opts.hcs
+	if opts.hederaSidecar != "" {
+		cfg.Hedera.Sidecar = strings.TrimSpace(opts.hederaSidecar)
+	}
 	cfg.Identity.RegistryContractID = strings.TrimSpace(opts.identityContract)
-	if opts.escrow {
-		cfg.Leases.PaymentMode = config.PaymentEscrow
-		cfg.Leases.EscrowContractID = strings.TrimSpace(opts.escrowContract)
+	if opts.sessions {
+		cfg.Leases.PaymentMode = config.PaymentSession
 		cfg.Leases.SelfSettle = opts.selfSettle
-		if cfg.Leases.EscrowContractID == "" {
-			return errors.New("--enable-escrow needs --escrow-contract naming the deployed SessionEscrow")
-		}
 		if !cfg.Leases.Enabled {
-			return errors.New("--enable-escrow only applies to interactive time; pass --enable-leases too")
+			return errors.New("--enable-sessions only applies to interactive time; pass --enable-leases too")
+		}
+		// Refused here rather than at the first sale. The running refund-owed
+		// trail is what makes prepaying a stranger checkable, and a session node
+		// without it is selling a promise with nothing behind it.
+		if !cfg.HCS.Enabled {
+			return errors.New("--enable-sessions needs --enable-hcs: the audit topic is where the node " +
+				"publishes what it owes a renter while their session runs")
 		}
 	}
 
@@ -428,6 +444,50 @@ func newRegistryToken() string {
 // it pays its own fees and signs topic messages and contract calls, and it is
 // NOT pay_to. Earnings accumulate in pay_to, which still signs nothing, so a
 // compromise of this key costs the HBAR sitting in it and nothing else.
+// hederaFundingTimeout bounds how long setup waits for a provider to fund the
+// operator key before giving up and falling back to "re-run me by hand."
+// Long enough to cover opening a wallet app and sending a transfer, short
+// enough that an unattended install script does not hang indefinitely.
+const hederaFundingTimeout = 10 * time.Minute
+
+// hederaFundingPollInterval matches the cadence a renter would notice funding
+// land at — fast enough to feel immediate, slow enough not to hammer the
+// mirror node while nothing has happened yet.
+const hederaFundingPollInterval = 5 * time.Second
+
+// waitForFunding polls the mirror node until the operator's address resolves
+// to a real account, or the timeout elapses.
+//
+// This is what turns "fund this address, then re-run setup" into a single
+// sitting: a provider sends HBAR from their phone and setup notices on its
+// own, the same way the node itself never assumes a payment happened without
+// checking. Returns nil, nil on a timeout — not an error, since not funding
+// the key yet is a choice a provider is allowed to make.
+func waitForFunding(ctx context.Context, sidecar *hedera.Sidecar, evmAddress string) (*hedera.AccountInfo, error) {
+	deadline := time.Now().Add(hederaFundingTimeout)
+	ticker := time.NewTicker(hederaFundingPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			account, err := sidecar.AccountInfo(checkCtx, evmAddress)
+			cancel()
+			if err == nil && account.Found {
+				fmt.Printf("               funded\n")
+				return account, nil
+			}
+			if time.Now().After(deadline) {
+				return nil, nil
+			}
+			fmt.Print(".")
+		}
+	}
+}
+
 func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
 	sidecar := newSidecar(*cfg)
 	if err := sidecar.Available(); err != nil {
@@ -449,39 +509,54 @@ func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
 		// generated, but no Hedera account exists until someone sends HBAR to
 		// it — so "unfunded" is a step the provider has not taken yet, not a
 		// failure of setup.
+		//
+		// Rather than making that a second manual step — fund it, then remember
+		// to come back and re-run this whole command — setup waits here and
+		// polls the mirror node itself. A provider funding it from their phone
+		// finishes the entire install in one sitting instead of two.
 		fmt.Printf("               no account yet — send a few HBAR to that address to create it\n")
-		fmt.Printf("               (https://portal.hedera.com on testnet), then re-run setup\n")
-		return false, nil
+		fmt.Printf("               (https://portal.hedera.com on testnet)\n")
+		fmt.Printf("               waiting for it to arrive — ctrl-c to stop and configure without Hedera features\n")
+
+		account, err := waitForFunding(ctx, sidecar, key.EVMAddress)
+		if err != nil {
+			return false, fmt.Errorf("  hedera: %w", err)
+		}
+		if account == nil {
+			fmt.Printf("               still nothing after %s — fund it and re-run setup when you have\n",
+				hederaFundingTimeout)
+			return false, nil
+		}
+		key.AccountID = account.AccountID
+		key.BalanceTinybars = account.BalanceTinybars
 	}
 
 	cfg.Hedera.OperatorAccountID = key.AccountID
 	fmt.Printf("               %s, balance %s tinybars\n", key.AccountID, key.BalanceTinybars)
 
-	// Escrow pays out to pay_to through a contract, and two things can make
-	// that impossible. Both are checked now, because discovering either at
-	// payout time would mean a session that cannot be closed normally.
-	if cfg.Leases.PaymentMode == config.PaymentEscrow {
-		accountCtx, cancelAccount := context.WithTimeout(ctx, 30*time.Second)
-		account, err := sidecar.AccountInfo(accountCtx, cfg.PayTo)
-		cancelAccount()
+	// A session node with self_settle on pays refunds out of the operator
+	// account, which is a genuine change to what that key is for: it used to
+	// hold a fee float and nothing else. Checked here, because a provider who
+	// discovers it when a renter is owed money discovers it far too late.
+	//
+	// Earnings are untouched by this. They land in pay_to, which still signs
+	// nothing and whose key this machine still does not have.
+	if cfg.Leases.PaymentMode == config.PaymentSession && cfg.Leases.SelfSettle {
+		chunk, err := sessionChunkCost(cfg)
 		if err != nil {
-			return false, fmt.Errorf("  escrow: could not check pay_to %s: %w", cfg.PayTo, err)
+			return false, fmt.Errorf("  sessions: %w", err)
 		}
-		if !account.Found {
-			return false, fmt.Errorf("  escrow: pay_to %s does not exist on %s", cfg.PayTo, cfg.Network)
+		balance, ok := new(big.Int).SetString(key.BalanceTinybars, 10)
+		if !ok {
+			balance = big.NewInt(0)
 		}
-		if account.EVMAddress == "" {
-			return false, fmt.Errorf(
-				"  escrow: pay_to %s has no EVM address, so the contract cannot pay it — "+
-					"use an ECDSA account for escrow mode", cfg.PayTo)
+		fmt.Printf("  sessions     metered, %d-second chunks, refunds paid automatically\n",
+			cfg.Leases.SessionChunkSeconds)
+		if balance.Cmp(chunk) < 0 {
+			fmt.Printf("               WARNING: the operator account holds %s tinybars and one chunk is %s.\n",
+				key.BalanceTinybars, chunk.String())
+			fmt.Printf("               Top it up, or a refund will be published as owed and not paid.\n")
 		}
-		if account.ReceiverSigRequired {
-			return false, fmt.Errorf(
-				"  escrow: pay_to %s has receiverSigRequired set, so a contract cannot pay it — "+
-					"clear that flag or use a different pay_to", cfg.PayTo)
-		}
-		fmt.Printf("  escrow       %s\n", cfg.Leases.EscrowContractID)
-		fmt.Printf("               pays %s (%s)\n", account.EVMAddress, cfg.PayTo)
 	}
 
 	if cfg.HCS.Enabled && cfg.HCS.TopicID == "" {
@@ -502,4 +577,26 @@ func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// sessionChunkCost is what one chunk of metered time costs, and therefore the
+// most a single refund can ever be.
+//
+// The provider's exposure is bounded by exactly this: a session holds at most
+// one unburned chunk of the renter's money at a time, so an operator account
+// that can cover one chunk can cover any refund the node will ever owe.
+func sessionChunkCost(cfg *config.Config) (*big.Int, error) {
+	price := cfg.Leases.PriceTinybarsPerSecond
+	if price == "" {
+		perSecond, err := escrow.PricePerSecond(cfg.Leases.PriceTinybarsPerMinute)
+		if err != nil {
+			return nil, fmt.Errorf("the lease price is misconfigured: %w", err)
+		}
+		return new(big.Int).Mul(perSecond, big.NewInt(int64(cfg.Leases.SessionChunkSeconds))), nil
+	}
+	perSecond, ok := new(big.Int).SetString(price, 10)
+	if !ok {
+		return nil, errors.New("leases.price_tinybars_per_second is not a whole number of tinybars")
+	}
+	return new(big.Int).Mul(perSecond, big.NewInt(int64(cfg.Leases.SessionChunkSeconds))), nil
 }

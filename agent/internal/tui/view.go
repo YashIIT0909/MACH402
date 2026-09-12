@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -11,258 +10,227 @@ import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 )
 
-// Colours are adaptive: a provider's terminal may be light or dark, and the
-// dashboard has to stay readable in both. Nothing here assumes 24-bit colour.
-var (
-	styleTitle   = lipgloss.NewStyle().Bold(true)
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "244", Dark: "245"})
-	styleMoney   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "42"})
-	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "166", Dark: "214"})
-	styleBad     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "160", Dark: "203"})
-	styleGood    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "42"})
-	styleRunning = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "26", Dark: "39"})
-	styleSelect  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "57", Dark: "141"})
-	styleRule    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "250", Dark: "238"})
-)
+// chromeLines is what the header, tab strip and footer cost, and so what every
+// tab has to draw within. Tabs are handed their height rather than measuring it
+// themselves so that adding a line to the header cannot silently push the
+// bottom of a table off the screen.
+const chromeLines = 5
 
 func (m *Model) View() string {
 	if m.quitting {
-		if m.serverErr != nil {
-			return "node stopped: " + m.serverErr.Error() + "\n"
-		}
-		return fmt.Sprintf("node stopped. %d settlement(s), %s earned this session.\n",
-			m.settlements, formatHBAR(m.earnedTinybars))
+		return m.farewell()
 	}
+
+	width := max(m.width, 64)
+	height := max(m.height, 16)
+
 	if m.showHelp {
-		return m.helpView()
+		return m.helpView(width)
 	}
 
-	width := m.width
-	if width < 60 {
-		width = 60
-	}
+	body := m.tabView(width, height-chromeLines)
 
 	var b strings.Builder
-	b.WriteString(m.headerView(width))
-	b.WriteString(m.rule(width))
-	b.WriteString(m.jobsView(width))
-	b.WriteString(m.rule(width))
-	b.WriteString(m.logsView(width))
-	b.WriteString(m.rule(width))
-	b.WriteString(m.feedView(width))
-	b.WriteString(m.rule(width))
-	b.WriteString(m.footerView(width))
+	b.WriteString(m.statusBar(width))
+	b.WriteString(m.tabStrip(width))
+	b.WriteString("\n")
+	b.WriteString(body)
+	b.WriteString(m.footer(width))
 	return b.String()
 }
 
-func (m *Model) rule(width int) string {
-	return styleRule.Render(strings.Repeat("─", width)) + "\n"
+// farewell is the last thing a provider sees. It reports the session's takings
+// and points at the file that can prove them, because the dashboard's own
+// numbers vanish with the process and receipts.jsonl does not.
+func (m *Model) farewell() string {
+	if m.serverErr != nil {
+		return styleBad.Render("node stopped: "+m.serverErr.Error()) + "\n"
+	}
+	session, count := m.earnedSince(m.startedAt)
+	return fmt.Sprintf("node stopped. %d settlement(s) this session, %s earned.\n%s\n",
+		count, styleMoney.Render(formatHBAR(session)),
+		styleDim.Render("full history: "+m.cfg.ReceiptsPath+"  (cleargate-node earnings)"))
 }
 
-func (m *Model) headerView(width int) string {
-	state := styleGood.Render("accepting")
+// tabView renders the selected screen, clipped to the height it was given so a
+// short terminal loses the bottom of a panel rather than scrolling the header
+// off the top.
+func (m *Model) tabView(width, height int) string {
+	var content string
+	switch m.tab {
+	case tabOverview:
+		content = m.overviewView(width, height)
+	case tabJobs:
+		content = m.jobsView(width, height)
+	case tabLeases:
+		content = m.leasingView(width, height)
+	case tabActivity:
+		content = m.activityView(width, height)
+	case tabNode:
+		content = m.nodeView(width, height)
+	}
+
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+		lines[height-1] = styleDim.Render("  … the terminal is too short to show the rest")
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// statusBar is the one line that is true on every screen: who this node is,
+// whether it is selling, and what it has made.
+func (m *Model) statusBar(width int) string {
+	state := badge("ACCEPTING", colGood)
 	if m.server.Paused() {
-		state = styleWarn.Render("paused")
+		state = badge("PAUSED", colWarn)
 	}
 
-	uptime := time.Since(m.startedAt).Round(time.Second)
-	left := fmt.Sprintf("%s  %s  %s",
-		styleTitle.Render("ClearGate"), m.cfg.NodeID, state)
-	right := fmt.Sprintf("agent %s   up %s", m.version, uptime)
+	left := fmt.Sprintf("%s %s  %s  %s",
+		styleAccent.Render("◆"),
+		styleTitle.Render("ClearGate"),
+		m.cfg.NodeID,
+		state)
 
-	var gpu string
-	switch {
-	case !m.gpu.Available && m.gpu.Model != "":
-		// The card exists but cannot be passed through. Say so every second the
-		// dashboard is open: a provider must never believe they are selling GPU
-		// time when they are selling CPU time.
-		gpu = styleWarn.Render("GPU  " + m.gpu.Model + " present but NOT usable — CPU-fallback mode")
-	case !m.gpu.Available:
-		gpu = styleWarn.Render("GPU  none — CPU-fallback mode")
-	default:
-		gpu = fmt.Sprintf("GPU  %s · %d MB · %d%% util · %d/%d MB",
-			m.gpu.Model, m.gpu.VRAMMb, m.gpuUtil, m.gpuUsedMB, m.gpu.VRAMMb)
-	}
-
-	money := fmt.Sprintf("%s per job → %s     earned %s over %d job(s)",
-		formatHBAR(parseTinybars(m.cfg.PriceTinybars)),
-		m.cfg.PayTo,
+	right := fmt.Sprintf("%s   %s   %s",
 		styleMoney.Render(formatHBAR(m.earnedTinybars)),
-		m.settlements)
+		styleDim.Render(m.cfg.Network),
+		styleDim.Render(m.version+" · up "+duration(time.Since(m.startedAt))))
 
-	return spread(left, right, width) + "\n" +
-		"  " + gpu + "\n" +
-		"  " + money + "\n"
+	return spread(left, right, width) + "\n"
 }
 
-func (m *Model) jobsView(width int) string {
-	if len(m.jobs) == 0 {
-		return styleDim.Render("  no jobs yet — the node is listening on "+m.cfg.ListenAddr) + "\n"
-	}
-
-	rows := m.jobRows()
-	var b strings.Builder
-	b.WriteString(styleDim.Render(fmt.Sprintf("  %-9s %-10s %-28s %-9s %s",
-		"JOB", "STATUS", "IMAGE", "ELAPSED", "DETAIL")) + "\n")
-
-	for i, job := range rows {
-		marker := "  "
-		line := fmt.Sprintf("%-9s %-10s %-28s %-9s %s",
-			short(job.JobID),
-			job.Status,
-			truncate(job.Image, 28),
-			elapsed(job),
-			detailOf(job))
-
-		if i == m.selected {
-			marker = styleSelect.Render("▸ ")
-			line = styleSelect.Render(line)
-		} else {
-			line = statusStyle(job.Status).Render(line)
+// tabStrip carries a badge per tab, so a provider on the Overview can see that
+// three jobs are running or that a session is live without switching to look.
+func (m *Model) tabStrip(width int) string {
+	parts := make([]string, 0, len(tabOrder))
+	for i, t := range tabOrder {
+		label := fmt.Sprintf("%d %s", i+1, t.title())
+		if note := m.tabBadge(t); note != "" {
+			label += " " + note
 		}
-		b.WriteString(marker + truncate(line, width) + "\n")
-	}
-	return b.String()
-}
-
-// jobRows limits the table to what fits, keeping the selection visible.
-func (m *Model) jobRows() []runner.State {
-	capacity := m.height - 18
-	if capacity < 3 {
-		capacity = 3
-	}
-	if len(m.jobs) <= capacity {
-		return m.jobs
-	}
-	start := m.selected - capacity/2
-	if start < 0 {
-		start = 0
-	}
-	if start+capacity > len(m.jobs) {
-		start = len(m.jobs) - capacity
-	}
-	return m.jobs[start : start+capacity]
-}
-
-func (m *Model) logsView(width int) string {
-	job, ok := m.selectedJob()
-	if !ok {
-		return styleDim.Render("  no job selected") + "\n"
-	}
-
-	header := styleDim.Render("  logs · " + short(job.JobID))
-	capacity := 6
-	tail := m.logTail
-	if len(tail) > capacity {
-		tail = tail[len(tail)-capacity:]
-	}
-
-	var b strings.Builder
-	b.WriteString(header + "\n")
-	if len(tail) == 0 {
-		b.WriteString(styleDim.Render("  (no output yet)") + "\n")
-		return b.String()
-	}
-	for _, line := range tail {
-		text := truncate(line.Text, width-4)
-		if line.Stream == "stderr" {
-			b.WriteString("  " + styleBad.Render(text) + "\n")
+		if t == m.tab {
+			parts = append(parts, styleTabOn.Render(label))
 		} else {
-			b.WriteString("  " + text + "\n")
+			parts = append(parts, styleTabOff.Render(label))
 		}
 	}
-	return b.String()
+	strip := "  " + strings.Join(parts, styleBorder.Render("  │  "))
+	return truncate(strip, width) + "\n"
 }
 
-func (m *Model) feedView(width int) string {
-	capacity := 5
-	feed := m.feed
-	if len(feed) > capacity {
-		feed = feed[len(feed)-capacity:]
+func (m *Model) tabBadge(t tab) string {
+	switch t {
+	case tabJobs:
+		if live := m.runningJobs(); live > 0 {
+			return styleRunning.Render(fmt.Sprintf("(%d)", live))
+		}
+	case tabLeases:
+		if !m.runner.LeasesEnabled() {
+			return styleDim.Render("(off)")
+		}
+		if lease, ok := m.runner.ActiveLease(); ok && !lease.Status().IsTerminal() {
+			return styleGood.Render("●")
+		}
+	case tabActivity:
+		if m.feedOffset > 0 {
+			return styleWarn.Render("↑")
+		}
 	}
-	if len(feed) == 0 {
-		return styleDim.Render("  waiting for the first payment…") + "\n"
-	}
-
-	var b strings.Builder
-	for _, event := range feed {
-		b.WriteString("  " + truncate(renderEvent(event), width-4) + "\n")
-	}
-	return b.String()
+	return ""
 }
 
-// renderEvent is where the provider actually watches money arrive, so a
-// settlement carries its transaction id in full — that string is what they
-// paste into HashScan to confirm it themselves.
-func renderEvent(event runner.Event) string {
-	stamp := styleDim.Render(event.At.Format("15:04:05"))
-
-	switch event.Kind {
-	case runner.EventSettled:
-		return fmt.Sprintf("%s %s %s from %s  %s",
-			stamp,
-			styleMoney.Render("settled"),
-			formatHBAR(parseTinybars(event.Tinybars)),
-			event.Payer,
-			styleDim.Render(event.Transaction))
-	case runner.EventSettleFailed:
-		return fmt.Sprintf("%s %s %s", stamp, styleBad.Render("settle failed"), event.Detail)
-	case runner.EventVerified:
-		return fmt.Sprintf("%s %s payer %s", stamp, styleGood.Render("verified"), event.Payer)
-	case runner.EventRejected:
-		return fmt.Sprintf("%s %s %s", stamp, styleBad.Render("payment rejected"), event.Detail)
-	case runner.EventChallenged:
-		return fmt.Sprintf("%s %s %s", stamp, styleDim.Render("402 challenge"), event.Detail)
-	case runner.EventJobStaging:
-		return fmt.Sprintf("%s %s %s  %s", stamp, styleRunning.Render("staging"), short(event.JobID), event.Detail)
-	case runner.EventJobStarted:
-		return fmt.Sprintf("%s %s %s  %s", stamp, styleRunning.Render("started"), short(event.JobID), event.Detail)
-	case runner.EventJobFinished:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			statusStyle(event.Status).Render(string(event.Status)), short(event.JobID), event.Detail)
-	case runner.EventJobReaped:
-		return fmt.Sprintf("%s %s %s", stamp, styleDim.Render("reaped"), short(event.JobID))
-	// A provider should be able to watch a stranger's shell open on their
-	// machine and close again, in the same feed as the money.
-	case runner.EventLeaseStarted:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			styleRunning.Render("lease open"), short(event.LeaseID), event.Detail)
-	case runner.EventLeaseExtended:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			styleGood.Render("lease extended"), short(event.LeaseID), event.Detail)
-	case runner.EventLeasePaused:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			styleWarn.Render("lease frozen"), short(event.LeaseID), event.Detail)
-	case runner.EventLeaseEnded:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			styleDim.Render("lease ended"), short(event.LeaseID), event.Detail)
-	default:
-		return fmt.Sprintf("%s %s %s", stamp, event.Kind, event.Detail)
+// footer is the pending confirmation if there is one, then a flash message if
+// one is fresh, and otherwise the keys that do something on this tab.
+func (m *Model) footer(width int) string {
+	if m.confirm != "" {
+		return "\n  " + styleBad.Render(truncate(m.confirmText, width-4)) + "\n"
 	}
-}
-
-func (m *Model) footerView(width int) string {
 	if m.statusFlash != "" && time.Now().Before(m.flashUntil) {
-		return "  " + styleWarn.Render(truncate(m.statusFlash, width-4)) + "\n"
+		return "\n  " + styleWarn.Render(truncate(m.statusFlash, width-4)) + "\n"
 	}
-	keys := "↑↓ select   x kill job   p pause/resume   ? help   q quit"
-	return "  " + styleDim.Render(keys) + "\n"
+
+	keys := []string{"1-5/tab screens"}
+	switch m.tab {
+	case tabJobs, tabOverview:
+		keys = append(keys, "↑↓ select", "x kill job")
+	case tabLeases:
+		keys = append(keys, "e end lease")
+	case tabActivity:
+		keys = append(keys, "↑↓ scroll", "g/G top/live", "f filter")
+	}
+	keys = append(keys, "p pause", "? help", "q quit")
+
+	return "\n  " + styleDim.Render(truncate(strings.Join(keys, "  ·  "), width-4)) + "\n"
 }
 
-func (m *Model) helpView() string {
-	return styleTitle.Render("ClearGate — provider dashboard") + "\n\n" +
-		"  ↑ ↓ / j k   select a job\n" +
-		"  x           kill the selected job.\n" +
-		"              Flat-fee jobs are paid up front, so the renter is NOT\n" +
-		"              refunded. Metered leases are where stopping saves money.\n" +
-		"  p           pause or resume selling jobs. Running jobs keep running;\n" +
-		"              new requests get a 503 instead of a 402, so nobody pays\n" +
-		"              for a job this node will not start.\n" +
-		"  ?           close this help\n" +
-		"  q           stop the node\n\n" +
-		styleDim.Render("  Earnings shown here count this session's settlements. The\n"+
-			"  authoritative record is receipts.jsonl — `cleargate-node earnings`\n"+
-			"  reads it without trusting this display or any website.\n")
+// spread puts left and right on one line with the gap between them, and gives
+// the left side priority when the terminal is too narrow for both.
+//
+// Which side wins matters: the left is which node this is and whether it is
+// selling, and a provider with several terminals open needs that even on a
+// window too narrow for the uptime beside it.
+func spread(left, right string, width int) string {
+	available := width - 2
+
+	if leftWidth := lipgloss.Width(left); leftWidth+lipgloss.Width(right)+2 > available {
+		if leftWidth >= available {
+			return " " + truncate(left, available)
+		}
+		right = truncate(right, available-leftWidth-2)
+	}
+
+	gap := available - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return " " + left + strings.Repeat(" ", gap) + right
+}
+
+func (m *Model) helpView(width int) string {
+	lines := func(rows ...string) []string { return rows }
+
+	var b strings.Builder
+	b.WriteString(" " + styleTitle.Render("ClearGate — provider dashboard") + "\n\n")
+
+	b.WriteString(indent(cardRow(width-2, card{"screens", lines(
+		kv("1 Overview", "earnings, this machine, and who can reach it"),
+		kv("2 Jobs", "the job table, what each one is doing, and its output"),
+		kv("3 Leasing", "the shell or notebook a renter has on this box right now"),
+		kv("4 Activity", "every payment and state change, filterable"),
+		kv("5 Node", "the configuration this node is actually running under"),
+		"",
+		kv("tab / ←→", "next or previous screen"),
+	)})))
+
+	b.WriteString(indent(cardRow(width-2, card{"controls", lines(
+		kv("↑ ↓ / j k", "move the selection, or scroll the activity feed"),
+		kv("p", "pause or resume selling. Work already running continues;"),
+		kv("", "new requests get a 503 instead of a 402, so nobody pays"),
+		kv("", "for something this node will not start."),
+		kv("x", "kill the selected job. Flat-fee jobs are paid up front,"),
+		kv("", "so the renter is "+styleBad.Render("not refunded")+"."),
+		kv("e", "end the lease running now. A metered session is charged"),
+		kv("", "for the seconds it used and refunded the rest; a"),
+		kv("", "direct-paid lease forfeits its slice."),
+		kv("", ""),
+		kv("", styleDim.Render("x and e ask once more before acting.")),
+		kv("f", "on Activity, cycle what the feed shows"),
+		kv("g / G", "on Activity, jump to the oldest kept line or back to live"),
+		kv("? / q", "close this help / stop the node"),
+	)})))
+
+	b.WriteString(" " + styleDim.Render(
+		"Earnings here are read from "+m.cfg.ReceiptsPath+", the same append-only file") + "\n")
+	b.WriteString(" " + styleDim.Render(
+		"`cleargate-node earnings` reads. It is the record that does not depend on this") + "\n")
+	b.WriteString(" " + styleDim.Render(
+		"display, on the registry, or on our website.") + "\n\n")
+	b.WriteString(" " + styleDim.Render("press any key to go back") + "\n")
+	return b.String()
 }
 
 func statusStyle(status runner.Status) lipgloss.Style {
@@ -280,55 +248,17 @@ func statusStyle(status runner.Status) lipgloss.Style {
 	}
 }
 
-func detailOf(job runner.State) string {
-	if job.Stage != "" {
-		return job.Stage
+func leaseStatusStyle(status runner.LeaseStatus) lipgloss.Style {
+	switch status {
+	case runner.LeaseActive:
+		return styleRunning
+	case runner.LeasePaused:
+		return styleWarn
+	case runner.LeaseStopped, runner.LeaseExpired:
+		return styleDim
+	case runner.LeaseFailed:
+		return styleBad
+	default:
+		return lipgloss.NewStyle()
 	}
-	if job.Error != nil && *job.Error != "" {
-		return *job.Error
-	}
-	if job.ExitCode != nil {
-		return fmt.Sprintf("exit %d", *job.ExitCode)
-	}
-	if job.GPU {
-		return "gpu"
-	}
-	return ""
-}
-
-func elapsed(job runner.State) string {
-	start := startTime(job)
-	if start.IsZero() {
-		return "—"
-	}
-	end := time.Now()
-	if job.EndedAt != nil {
-		if parsed, err := time.Parse(time.RFC3339, *job.EndedAt); err == nil {
-			end = parsed
-		}
-	}
-	d := end.Sub(start).Round(time.Second)
-	return fmt.Sprintf("%02d:%02d:%02d", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
-}
-
-// spread puts left and right on one line with the gap between them.
-func spread(left, right string, width int) string {
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if gap < 1 {
-		gap = 1
-	}
-	return "  " + left + strings.Repeat(" ", gap) + right
-}
-
-// formatHBAR renders tinybars as HBAR using integer arithmetic only. Payment
-// amounts are never floats anywhere in this project.
-func formatHBAR(tinybars int64) string {
-	value := big.NewInt(tinybars)
-	perHBAR := big.NewInt(100_000_000)
-	whole, frac := new(big.Int).QuoRem(value, perHBAR, new(big.Int))
-	if frac.Sign() == 0 {
-		return whole.String() + " HBAR"
-	}
-	fraction := strings.TrimRight(fmt.Sprintf("%08d", frac), "0")
-	return whole.String() + "." + fraction + " HBAR"
 }

@@ -49,13 +49,18 @@ And the metered half of **M3**, **interactive leases** — the other way to buy 
 
 And **M4** — the parts that make this a marketplace an agent can use rather than only a person:
 
-- **Escrow-backed sessions** (`POST /v1/sessions`): pay by the second into a Hedera smart contract
-  instead of forward to the provider. Stop early and the contract pays the provider for the seconds
-  you actually used and **refunds the rest** — computed by code neither party controls. `settle` is
-  permissionless, so your refund never depends on the provider cooperating.
-- **An HCS audit trail**: every settlement is published to a Hedera Consensus Service topic the
-  provider owns, so earnings can be audited without trusting this project's website — or the
-  provider's own node.
+- **Metered, refundable sessions** (`POST /v1/sessions`): pay for a small chunk of time at a time
+  and have the node burn it down by the second. Stop early and the **unburned remainder comes back**.
+  What makes that checkable rather than merely promised is the audit trail below: the node publishes
+  what it would owe you *right now*, every fifteen seconds your session runs, to a topic it cannot
+  edit. A provider who later refuses to refund is refusing a number they already signed, repeatedly,
+  before there was anything to argue about.
+  A session payment is capped at `leases.session_chunk_seconds` (five minutes by default) however
+  long a session you ask for, so that is the most of your money a provider ever holds ahead of the
+  compute it pays for.
+- **An HCS audit trail**: every settlement — and every session burn checkpoint — is published to a
+  Hedera Consensus Service topic the provider owns, so earnings and debts can be audited without
+  trusting this project's website or the provider's own node.
 - **ERC-8004 provider identity**: `cleargate-node register` gives a provider a persistent on-chain
   agent id, and the node serves its own agent card at `/.well-known/agent-card.json`. A renting
   agent can resolve and check a provider without going through our registry at all.

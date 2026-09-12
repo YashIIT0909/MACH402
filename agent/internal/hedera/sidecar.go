@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os/exec"
 	"strings"
 	"time"
@@ -157,7 +158,40 @@ func (s *Sidecar) RegisterIdentity(ctx context.Context, registry, domain string)
 	return &out, nil
 }
 
+// Refund returns a metered session's unburned credit to the renter.
+//
+// The one operation here that spends a provider's own money rather than gas,
+// which is why the amount is a *big.Int from the lease's own ledger and the
+// recipient is the payer the facilitator confirmed — neither is anything a
+// renter supplied. A failure is reported rather than swallowed: the node
+// records a refund as paid only once the network has accepted it, because the
+// same number goes onto a public audit trail.
+func (s *Sidecar) Refund(ctx context.Context, to string, tinybars *big.Int, memo string) (string, error) {
+	if tinybars == nil || tinybars.Sign() <= 0 {
+		return "", fmt.Errorf("refusing to refund %v tinybars; the amount must be positive", tinybars)
+	}
+	if strings.TrimSpace(to) == "" {
+		return "", errors.New("no account to refund; the settlement named no payer")
+	}
+
+	var out struct {
+		Transaction string `json:"transaction"`
+	}
+	err := s.run(ctx, defaultTimeout, nil, &out,
+		"refund", "--to", to, "--tinybars", tinybars.String(), "--memo", memo)
+	if err != nil {
+		return "", err
+	}
+	if out.Transaction == "" {
+		return "", errors.New("sidecar reported no transaction for the refund")
+	}
+	return out.Transaction, nil
+}
+
 // SettleSession closes an escrow session on-chain.
+//
+// Retained for the parked escrow path; nothing on the metered session flow
+// calls it. See the README's note on payment_mode: escrow-vault.
 func (s *Sidecar) SettleSession(ctx context.Context, contract, sessionID string) (string, error) {
 	var out struct {
 		Transaction string `json:"transaction"`
