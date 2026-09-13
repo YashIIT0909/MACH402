@@ -12,7 +12,7 @@ import { Eyebrow, useSectionReveal, useSeen } from "./primitives";
  * install, because the point of the package is that an agent host can reach
  * it with nothing but Node — no checkout of this repo, no pnpm workspace.
  */
-const ADD_COMMAND = "claude mcp add cleargate -- npx -y @cleargate/mcp-server";
+const ADD_COMMAND = "claude mcp add mach402 -- npx -y mach402-mcp-server";
 
 /*
  * The tool surface, from packages/mcp-server/README.md, in the README's order
@@ -146,7 +146,7 @@ export function McpSection() {
                 {ADD_COMMAND}
                 {"\n"}
                 <span className="text-muted-foreground/60">
-                  {"\n# env: HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, CLEARGATE_REGISTRY_URL"}
+                  {"\n# env: HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, mach402_REGISTRY_URL"}
                 </span>
               </pre>
             </div>

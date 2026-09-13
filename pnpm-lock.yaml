@@ -8,12 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@cleargate/client':
+        specifier: workspace:*
+        version: link:client
       '@cleargate/hederakit':
         specifier: workspace:*
         version: link:hederakit
-      '@mach402/mcp-server':
-        specifier: workspace:*
-        version: link:packages/mcp-server
       '@types/node':
         specifier: 22.20.2
         version: 22.20.2
