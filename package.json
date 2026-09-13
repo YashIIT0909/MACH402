@@ -17,6 +17,7 @@
     "@cleargate/client": "workspace:*",
     "@cleargate/hederakit": "workspace:*",
     "@cleargate/mcp-server": "workspace:*"
+    "@cleargate/hederakit": "workspace:*"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

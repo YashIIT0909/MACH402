@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,18 +17,15 @@ import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
 )
 
-// A lease is the inverse of a job.
+// A lease sends nothing of the renter's to the provider: the renter gets a shell
+// and a Jupyter server on the provider's GPU for as long as their credit lasts,
+// and their code and data never leave their own machine.
 //
-// A job sends the renter's code to the provider's machine and runs it in a box
-// with no network at all. A lease sends nothing: the renter gets a shell and a
-// Jupyter server on the provider's GPU for the time they paid for, and their
-// code and data never leave their own machine.
-//
-// That inversion moves the risk. Nothing untrusted is uploaded, but somebody
-// the provider has never met has an interactive session on their hardware and
-// their IP address. So the containment here is stricter than the job sandbox
-// in the places that matter for a live shell — see leaseContainerRequest and
-// the egress proxy — rather than looser.
+// That moves the risk rather than removing it. Nothing untrusted is uploaded,
+// but somebody the provider has never met has an interactive session on their
+// hardware and their IP address. So the containment here is strict in the
+// places that matter for a live shell — see leaseContainerRequest and the
+// egress proxy.
 const (
 	// leaseLabel marks every container, volume and network a lease creates, so
 	// the startup sweep can find orphans from a crash without touching anything
@@ -79,9 +77,10 @@ func (s LeaseStatus) IsTerminal() bool {
 	}
 }
 
-// LeaseSpec is what a renter POSTs to /v1/leases.
+// LeaseSpec is what a session provisions its container for.
 type LeaseSpec struct {
-	// Minutes is the first slice of time being bought. Extensions buy more.
+	// Minutes is how long the container is provisioned for: the opening chunk,
+	// rounded up. Top-ups extend it through the meter, not through this.
 	Minutes int `json:"minutes"`
 
 	// PublicKey is the renter's own SSH public key, generated on their machine.
@@ -107,31 +106,31 @@ type Lease struct {
 	volume       string
 	containerIP  string
 	jupyterToken string
-	// publicKey is the renter's own SSH public key. It is kept so an extension
-	// can re-sign against the same identity if the renter does not send a new
-	// one; the private half was never here to keep.
-	publicKey    string
-	gpu          bool
-	createdAt    time.Time
-	expiresAt    time.Time
-	sliceMinutes int
-	paidMinutes  int
-	pausedAt     *time.Time
-	err          string
+	// publicKey is the renter's own SSH public key, kept so the certificate is
+	// signed against the identity they presented; the private half was never
+	// here to keep.
+	publicKey   string
+	gpu         bool
+	createdAt   time.Time
+	expiresAt   time.Time
+	paidMinutes int
+	pausedAt    *time.Time
+	err         string
 
-	// Metering fields, set only on a lease sold as a session
-	// (leases.payment_mode: session). A session IS a lease — same container,
-	// same certificate, same freeze-and-reap — differing only in how it was
-	// paid for and therefore in what happens when it ends.
+	// Metering fields, set once the session's opening chunk settles. A session
+	// IS a lease — same container, same certificate, same freeze-and-reap —
+	// and what it buys is CREDIT: a paid-up balance that the meter burns down
+	// second by second while the container is actually running, and whose
+	// remainder belongs to the renter the moment they stop.
 	//
-	// A direct lease buys TIME: expiresAt moves and nothing is owed back. A
-	// session buys CREDIT: a paid-up balance that the meter burns down second
-	// by second while the container is actually running, and whose remainder
-	// belongs to the renter the moment they stop.
-	//
-	// sessionID is the session's key; empty on a direct-paid lease, which is
-	// how the rest of the code tells the two apart.
+	// sessionID is the session's key; empty only between provisioning and the
+	// opening chunk settling.
 	sessionID string
+	// sessionSeconds is the session length the renter chose. Credit is still
+	// bought in chunks of at most leases.session_chunk_seconds; this is what
+	// those chunks add up to, and the session ends once it has been used.
+	// Zero means no length was set.
+	sessionSeconds int64
 	// payer is the Hedera account the facilitator confirmed paid for this
 	// session. It is where a refund goes, so it comes from the settlement
 	// rather than from anything the renter asserted in a request body.
@@ -167,8 +166,8 @@ type Lease struct {
 type SettleState string
 
 const (
-	// SettleNotApplicable is a direct-paid lease: paid forward per slice, with
-	// nothing owed back and nothing to close.
+	// SettleNotApplicable is a lease whose opening chunk has not settled: no
+	// money has moved, so nothing is owed back and nothing needs closing.
 	SettleNotApplicable SettleState = ""
 	// SettlePending means the session is over and the node still holds credit
 	// that belongs to the renter.
@@ -177,10 +176,8 @@ const (
 	SettleDone SettleState = "done"
 )
 
-// LeaseState is the read-only view returned by GET /v1/leases/:id.
-//
-// The renter's CLI polls this to decide when to buy another slice, so
-// seconds_remaining is the field that actually drives auto-extension.
+// LeaseState is the container-level view a session's state is built from, and
+// what the provider's dashboard lists.
 type LeaseState struct {
 	LeaseID          string      `json:"lease_id"`
 	Status           LeaseStatus `json:"status"`
@@ -222,9 +219,8 @@ func (l *Lease) State() LeaseState {
 // recomputed from a price table, because the whole point of the refund trail is
 // that the number the node owes back is derived from money that actually moved.
 //
-// From here on the lease behaves identically to a direct-paid one except that
-// the meter, not the clock, decides when it runs out, and that the remainder
-// belongs to the renter when it ends.
+// From here on the meter, not the clock, decides when the lease runs out, and
+// the remainder belongs to the renter when it ends.
 func (l *Lease) MarkMetered(sessionID, payer string, pricePerSecond, credit *big.Int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -241,9 +237,8 @@ func (l *Lease) MarkMetered(sessionID, payer string, pricePerSecond, credit *big
 // AddCredit banks another paid chunk. The session's expiry moves out by
 // whatever that credit buys at the rate fixed when it opened.
 //
-// The metered twin of ExtendLease, and deliberately additive rather than
-// absolute: a renter who tops up early keeps the runway they had left instead
-// of silently losing it.
+// Deliberately additive rather than absolute: a renter who tops up early keeps
+// the runway they had left instead of silently losing it.
 func (l *Lease) AddCredit(amount *big.Int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -298,8 +293,8 @@ func (l *Lease) Burn(now time.Time) (burned, remaining *big.Int) {
 // means "how long has the credit been at zero". Two schedulers for one event is
 // exactly what this codebase does not have.
 //
-// A no-op on a direct-paid lease, whose expiry is the time it bought and has
-// nothing to do with any credit. The caller holds l.mu.
+// A no-op until the opening chunk has settled and there is a credit to measure.
+// The caller holds l.mu.
 func (l *Lease) syncExpiryLocked() {
 	if l.pricePerSecond == nil || l.credit == nil {
 		return
@@ -317,9 +312,8 @@ func (l *Lease) syncExpiryLocked() {
 		l.expiresAt = l.lastTickAt
 	}
 
-	// paidMinutes is what ValidateLeaseExtension and the lease state report.
-	// For a session it means "minutes bought in total", which is burned plus
-	// remaining, rounded up.
+	// paidMinutes is what the lease state reports: minutes bought in total,
+	// which is burned plus remaining, rounded up.
 	total := new(big.Int).Add(l.burned, l.credit)
 	if l.pricePerSecond.Sign() > 0 {
 		seconds := new(big.Int).Div(total, l.pricePerSecond).Int64()
@@ -343,6 +337,56 @@ func (l *Lease) SecondsRemaining() int64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.secondsRemainingLocked()
+}
+
+// SetSessionLength records the session length the renter chose, in seconds.
+func (l *Lease) SetSessionLength(seconds int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sessionSeconds = seconds
+}
+
+// SessionLength is the session length the renter chose, or 0 if none was set.
+func (l *Lease) SessionLength() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.sessionSeconds
+}
+
+// PaidSeconds is how much time every payment so far has bought: burned plus
+// unburned credit, at the session's rate.
+func (l *Lease) PaidSeconds() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.paidSecondsLocked()
+}
+
+func (l *Lease) paidSecondsLocked() int64 {
+	if l.credit == nil || l.burned == nil || l.pricePerSecond == nil || l.pricePerSecond.Sign() <= 0 {
+		return 0
+	}
+	total := new(big.Int).Add(l.burned, l.credit)
+	return new(big.Int).Div(total, l.pricePerSecond).Int64()
+}
+
+// UnpaidSeconds is how much of the chosen session length is still to be
+// bought. Zero once it is paid in full, and on a session with no length set.
+func (l *Lease) UnpaidSeconds() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.sessionSeconds <= 0 {
+		return 0
+	}
+	return max(l.sessionSeconds-l.paidSecondsLocked(), 0)
+}
+
+// FullyPaid reports whether the renter has paid for the whole session length
+// they chose. A fully paid session is not topped up again: it ends when its
+// credit is used.
+func (l *Lease) FullyPaid() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.sessionSeconds > 0 && l.paidSecondsLocked() >= l.sessionSeconds
 }
 
 // Credit is what the node owes back if the session stopped right now.
@@ -375,8 +419,8 @@ func (l *Lease) PricePerSecond() *big.Int {
 	return new(big.Int).Set(l.pricePerSecond)
 }
 
-// SessionID is the metered session backing this lease, or "" for a direct-paid
-// lease. This is what distinguishes the two everywhere else in the code.
+// SessionID is the metered session backing this lease, or "" before its
+// opening chunk has settled.
 func (l *Lease) SessionID() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -441,7 +485,7 @@ func (l *Lease) Status() LeaseStatus {
 	return l.status
 }
 
-// ExpiresAt is when the currently paid slice runs out.
+// ExpiresAt is when the credit currently paid for runs out.
 func (l *Lease) ExpiresAt() time.Time {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -606,8 +650,8 @@ func (r *Runner) ListLeases() []LeaseState {
 // ValidateLeaseSpec rejects a lease before the renter is asked to pay.
 //
 // Everything refused here is free: no challenge is issued and nothing reaches
-// the chain. The image check matters more for leases than it does for jobs —
-// a lease settles only after the container is up and reachable, so there is no
+// the chain. The image check matters here in particular: a lease settles only
+// after the container is up and reachable, so there is no
 // staging phase to hide a multi-gigabyte pull in. If the image is not already
 // on the box, the honest answer is to say so now rather than to make a renter
 // wait past their payload's expiry.
@@ -648,32 +692,6 @@ func (r *Runner) ValidateLeaseSpec(ctx context.Context, spec LeaseSpec) error {
 	return nil
 }
 
-// ValidateLeaseExtension checks a top-up before the renter is asked to pay for
-// it, so a slice that would exceed this node's total cap is refused for free
-// rather than after the money has moved.
-func (r *Runner) ValidateLeaseExtension(lease *Lease, spec LeaseSpec) error {
-	leases := r.cfg.Leases
-	if spec.Minutes < leases.MinMinutes || spec.Minutes > leases.MaxMinutes {
-		return fmt.Errorf("minutes must be between %d and %d on this node", leases.MinMinutes, leases.MaxMinutes)
-	}
-	if err := sshca.ValidatePublicKey(spec.PublicKey); err != nil {
-		return err
-	}
-
-	lease.mu.RLock()
-	status, paid := lease.status, lease.paidMinutes
-	lease.mu.RUnlock()
-
-	if status.IsTerminal() {
-		return fmt.Errorf("this lease is already %s and cannot be extended", status)
-	}
-	if paid+spec.Minutes > leases.MaxTotalMinutes {
-		return fmt.Errorf("this node caps a lease at %d minutes total; %d have been bought already",
-			leases.MaxTotalMinutes, paid)
-	}
-	return nil
-}
-
 // StartLease provisions a lease container and returns once it is serving.
 //
 // It is called after payment verification and before settlement, so everything
@@ -702,11 +720,10 @@ func (r *Runner) StartLease(ctx context.Context, id, token, caPublicKey string, 
 		jupyterToken: jupyterToken,
 		publicKey:    strings.TrimSpace(spec.PublicKey),
 		// What the renter can actually use, not what the host has.
-		gpu:          r.LeaseGPU(),
-		createdAt:    time.Now(),
-		expiresAt:    time.Now().Add(time.Duration(spec.Minutes) * time.Minute),
-		sliceMinutes: spec.Minutes,
-		paidMinutes:  spec.Minutes,
+		gpu:         r.LeaseGPU(),
+		createdAt:   time.Now(),
+		expiresAt:   time.Now().Add(time.Duration(spec.Minutes) * time.Minute),
+		paidMinutes: spec.Minutes,
 	}
 
 	// Claim the single lease slot before doing anything expensive, so two
@@ -790,11 +807,9 @@ func (r *Runner) provisionLease(ctx context.Context, lease *Lease, caPublicKey s
 // lease's internal network, and on the default bridge.
 //
 // Everything the renter's container can reach off the box goes through here,
-// and this proxy denies by default. Interactive access makes egress abuse a
-// materially bigger liability than a batch job does — somebody with a live
-// terminal can spend the provider's IP reputation in ways a sandboxed script
-// cannot — so lease egress is an allowlist, not the blocklist the job flow's
-// dataset fetcher uses (implementation.md §3.4).
+// and this proxy denies by default. Somebody with a live terminal can spend the
+// provider's IP reputation in ways a sandboxed script cannot, so lease egress
+// is an allowlist rather than a blocklist (implementation.md §3.4).
 func (r *Runner) startEgressProxy(ctx context.Context, lease *Lease, labels map[string]string) error {
 	name := "cleargate-egress-" + lease.ID
 
@@ -844,14 +859,14 @@ func (r *Runner) startEgressProxy(ctx context.Context, lease *Lease, labels map[
 
 // leaseContainerRequest builds the interactive sandbox.
 //
-// It differs from the job sandbox in exactly the ways an interactive session
-// forces, and no further:
+// It is looser than a no-network batch sandbox in exactly the ways an
+// interactive session forces, and no further:
 //
 //   - It has a network, because a lease is useless if a renter cannot install a
 //     package. That network is internal and proxied (see startEgressProxy).
 //   - Its root filesystem is writable, because `pip install` and `apt-get` are
-//     the normal use of a rented dev box. The job sandbox's read-only root is
-//     not "practical" here in the sense implementation.md §3.3 means it.
+//     the normal use of a rented dev box. A read-only root is not "practical"
+//     here in the sense implementation.md §3.3 means it.
 //   - It keeps capped memory, CPU and process count, drops every capability but
 //     the handful sshd needs to accept a login, and refuses privilege gain.
 //
@@ -965,130 +980,16 @@ func (r *Runner) awaitJupyter(ctx context.Context, addr string) error {
 // afterwards, which is why the lease image must already be on the box.
 const leaseReadyTimeout = 90 * time.Second
 
-// ExtendLease pushes a lease's expiry out by another paid slice.
-//
-// A frozen lease is thawed here rather than in a separate call: paying is what
-// resumption means, and a renter who has just bought more time should find their
-// session where they left it.
-func (r *Runner) ExtendLease(ctx context.Context, lease *Lease, spec LeaseSpec) (Extension, error) {
-	minutes := spec.Minutes
-
-	lease.mu.Lock()
-	if lease.status.IsTerminal() {
-		lease.mu.Unlock()
-		return Extension{}, fmt.Errorf("this lease is already %s", lease.status)
-	}
-	if lease.paidMinutes+minutes > r.cfg.Leases.MaxTotalMinutes {
-		remaining := r.cfg.Leases.MaxTotalMinutes - lease.paidMinutes
-		lease.mu.Unlock()
-		return Extension{}, fmt.Errorf("this node caps a lease at %d minutes total; %d remain, so %d cannot be bought",
-			r.cfg.Leases.MaxTotalMinutes, remaining, minutes)
-	}
-
-	// Everything needed to put the lease back exactly as it was, in case the
-	// payment for this slice does not settle.
-	previous := Extension{
-		minutes:      minutes,
-		expiresAt:    lease.expiresAt,
-		sliceMinutes: lease.sliceMinutes,
-		publicKey:    lease.publicKey,
-		status:       lease.status,
-		pausedAt:     lease.pausedAt,
-	}
-
-	// A renter may present a fresh key on an extension; the certificate about
-	// to be minted is for whatever they sent now, so record that as theirs.
-	lease.publicKey = strings.TrimSpace(spec.PublicKey)
-
-	// Extend from now when the lease has already lapsed, and from the old
-	// expiry when it has not — otherwise a renter who extends early silently
-	// loses the time they had left.
-	base := lease.expiresAt
-	if base.Before(time.Now()) {
-		base = time.Now()
-	}
-	lease.expiresAt = base.Add(time.Duration(minutes) * time.Minute)
-	lease.paidMinutes += minutes
-	lease.sliceMinutes = minutes
-	wasPaused := lease.status == LeasePaused
-	containerID := lease.containerID
-	lease.pausedAt = nil
-	lease.status = LeaseActive
-	newExpiry := lease.expiresAt
-	lease.mu.Unlock()
-
-	if wasPaused && containerID != "" {
-		if err := r.docker.UnpauseContainer(ctx, containerID); err != nil {
-			r.log.Warn("could not thaw the extended lease", "lease", lease.ID, "error", err)
-		}
-	}
-
-	r.events.publish(Event{
-		Kind: EventLeaseExtended, LeaseID: lease.ID, Detail: fmt.Sprintf("+%d minutes", minutes),
-	})
-	r.log.Info("lease extended", "lease", lease.ID, "minutes", minutes, "expires_at", newExpiry)
-	return previous, nil
-}
-
-// Extension is what a lease looked like before a slice was added to it.
-//
-// An extension is applied before its payment settles, for the same reason a job
-// starts before its payment settles: the renter's signed payload expires, and
-// what they are buying has to be in place first. Unlike a job, though, the thing
-// applied here is trivially reversible — so when settlement fails, it is
-// reversed rather than left as free time.
-type Extension struct {
-	minutes      int
-	expiresAt    time.Time
-	sliceMinutes int
-	publicKey    string
-	status       LeaseStatus
-	pausedAt     *time.Time
-}
-
-// RevertExtension undoes an extension whose payment did not settle.
-//
-// The lease goes back to the expiry, slice size and identity it had a moment
-// ago. If it had already been frozen, it is frozen again: a renter whose
-// payment failed is exactly where they were before they tried, which is
-// mid-grace-period with the container's memory intact.
-func (r *Runner) RevertExtension(ctx context.Context, lease *Lease, previous Extension) {
-	lease.mu.Lock()
-	if lease.status.IsTerminal() {
-		lease.mu.Unlock()
-		return
-	}
-	lease.expiresAt = previous.expiresAt
-	lease.sliceMinutes = previous.sliceMinutes
-	lease.publicKey = previous.publicKey
-	lease.paidMinutes -= previous.minutes
-	lease.status = previous.status
-	lease.pausedAt = previous.pausedAt
-	refreeze := previous.status == LeasePaused
-	containerID := lease.containerID
-	lease.mu.Unlock()
-
-	if refreeze && containerID != "" {
-		if err := r.docker.PauseContainer(ctx, containerID); err != nil {
-			r.log.Warn("could not re-freeze a lease whose extension did not settle",
-				"lease", lease.ID, "error", err)
-		}
-	}
-	r.log.Info("extension reverted; nothing was charged", "lease", lease.ID, "minutes", previous.minutes)
-}
-
 // PauseLease freezes a lease whose paid time has lapsed.
 //
 // Freezing, not killing: the container's processes stop consuming CPU but keep
 // their memory and their open files, so a renter who is mid-training run and
-// slow to pay gets their session back when they extend. The grace period after
+// slow to top up gets their session back when they do. The grace period after
 // this is what eventually turns a frozen lease into a reaped one.
 // ResumeLease thaws a frozen container without buying time.
 //
-// The direct-payment path thaws inside ExtendLease, because there the act of
-// paying and the act of extending are one operation. A session's credit is
-// banked separately from the thaw — AddCredit then this — so the two steps are
-// distinct here.
+// A session's credit is banked separately from the thaw — AddCredit then this —
+// so the two steps are distinct.
 //
 // The meter's clock restarts with the thaw, so the frozen stretch is never
 // charged for. A renter who was slow to top up got nothing during it.
@@ -1139,16 +1040,16 @@ func (r *Runner) PauseLease(ctx context.Context, lease *Lease) error {
 	r.events.publish(Event{
 		Kind: EventLeasePaused, LeaseID: lease.ID, Detail: "paid time lapsed",
 	})
-	r.log.Info("lease frozen; extend to resume", "lease", lease.ID)
+	r.log.Info("lease frozen; top up to resume", "lease", lease.ID)
 	return nil
 }
 
 // StopLease ends a lease at the renter's request and releases the node's lease
 // slot for the next renter.
 //
-// Time already bought is not refunded — forward payment is what makes refunds
-// unnecessary by design — but stopping does end the meter, so a renter who is
-// done stops paying for the slices they would otherwise have auto-extended.
+// Refunding the unburned credit is the caller's job (httpapi's settleSession),
+// done with the lease it already holds: this releases the slot a re-lookup
+// would need.
 func (r *Runner) StopLease(ctx context.Context, lease *Lease, status LeaseStatus) {
 	lease.mu.Lock()
 	if lease.status.IsTerminal() {
@@ -1182,20 +1083,12 @@ func (l *Lease) OverdueBy() time.Duration {
 	return time.Since(l.expiresAt)
 }
 
-// SliceMinutes is the size of the last slice bought, which is what a "missed
-// extension" is measured in.
-func (l *Lease) SliceMinutes() int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.sliceMinutes
-}
-
 // reapLeaseResources destroys everything a lease owned.
 //
 // Order matters and is the reverse of creation: containers hold references to
 // the network and the volume, so both containers go first. The workspace volume
-// is destroyed rather than retained — unlike a job artifact, nobody is coming
-// back to download it, and a provider's disk must not become a long-term store
+// is destroyed rather than retained — nobody is coming back to download it, and
+// a provider's disk must not become a long-term store
 // for other people's data.
 func (r *Runner) reapLeaseResources(ctx context.Context, lease *Lease) {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -1240,10 +1133,9 @@ func (r *Runner) releaseLeaseSlot(id string) {
 // sweepLeaseOrphans removes lease containers, volumes and networks left over
 // from a previous process.
 //
-// Lease state lives in memory like job state does, so anything still labelled
-// as ours at startup is an orphan from a crash — and an orphaned lease is worse
-// than an orphaned job: it is a container with a live sshd on it that nothing
-// is now metering or reaping.
+// Lease state lives in memory, so anything still labelled as ours at startup is
+// an orphan from a crash — a container with a live sshd on it that nothing is
+// now metering or reaping.
 func (r *Runner) sweepLeaseOrphans(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -1291,4 +1183,13 @@ func randomHex(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
+}
+
+// constantTimeEqual compares two tokens without leaking their contents through
+// timing. An empty expected token never authorizes anything.
+func constantTimeEqual(expected, given string) bool {
+	if expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(given)) == 1
 }

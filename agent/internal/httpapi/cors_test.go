@@ -31,7 +31,7 @@ func TestCORSExposesPaymentHeaders(t *testing.T) {
 	// PAYMENT-REQUIRED cannot see what it is being asked to pay, and one that
 	// cannot read PAYMENT-RESPONSE cannot prove it paid.
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v1/leases", nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sessions", nil)
 	request.Header.Set("Origin", "https://cleargate.example")
 
 	corsHandler(corsServer([]string{"*"})).ServeHTTP(recorder, request)
@@ -48,7 +48,7 @@ func TestCORSPreflightAllowsPaymentSignature(t *testing.T) {
 	// A preflight that does not allow PAYMENT-SIGNATURE means the browser never
 	// sends the payment at all, and the renter sees a silent failure.
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodOptions, "/v1/leases", nil)
+	request := httptest.NewRequest(http.MethodOptions, "/v1/sessions", nil)
 	request.Header.Set("Origin", "https://cleargate.example")
 	request.Header.Set("Access-Control-Request-Method", "POST")
 	request.Header.Set("Access-Control-Request-Headers", "PAYMENT-SIGNATURE,Authorization")
@@ -122,7 +122,8 @@ func TestCORSAllowlistRefusesOtherOrigins(t *testing.T) {
 }
 
 func TestCORSIgnoresNonBrowserRequests(t *testing.T) {
-	// The CLI sends no Origin. It must pass through untouched.
+	// Non-browser clients — the smoke test, an agent — send no Origin. It must
+	// pass through untouched.
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/v1/specs", nil)
 
@@ -149,7 +150,7 @@ func TestCORSPreflightAllowsWhateverTheClientSends(t *testing.T) {
 	requested := "content-type,payment-signature,access-control-expose-headers"
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodOptions, "/v1/leases", nil)
+	request := httptest.NewRequest(http.MethodOptions, "/v1/sessions", nil)
 	request.Header.Set("Origin", "http://localhost:3000")
 	request.Header.Set("Access-Control-Request-Method", "POST")
 	request.Header.Set("Access-Control-Request-Headers", requested)
@@ -176,7 +177,7 @@ func TestCORSPreflightAllowsWhateverTheClientSends(t *testing.T) {
 // sends only Content-Type is unaffected by the echoing above.
 func TestCORSPreflightFallsBackToTheStaticList(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodOptions, "/v1/leases", nil)
+	request := httptest.NewRequest(http.MethodOptions, "/v1/sessions", nil)
 	request.Header.Set("Origin", "http://localhost:3000")
 	request.Header.Set("Access-Control-Request-Method", "POST")
 

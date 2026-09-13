@@ -2,11 +2,10 @@
 
 A GPU rental marketplace settled with [x402](https://docs.hedera.com/solutions/ai/x402) payments on
 Hedera. Providers run a daemon on an idle GPU; renters — people at a terminal or autonomous agents —
-pay that node directly, per job, and get a container run on it.
+pay that node directly, by the second, for a container on it.
 
 No API keys. No subscriptions. No custody. The renter pays the machine that does the work, and the
-payment settles on Hedera in under a second — or, for interactive time, goes into a contract that
-refunds whatever they do not use.
+payment settles on Hedera in under a second, and whatever credit they do not use comes back.
 
 Built for the *AI & Agentic Payments on Hedera* track. **Testnet only.**
 
@@ -14,60 +13,50 @@ Built for the *AI & Agentic Payments on Hedera* track. **Testnet only.**
 
 ## What works currently
 
-Milestones **M0** (payment spike) and **M1** (one node, one paid job):
+A node sells one thing: **metered sessions**.
 
-- A Go agent that serves an x402-gated API, verifies payment with the facilitator, runs a sandboxed
-  container, and settles immediately.
-- **Dataset staging**: the renter sends a *URL*, the node downloads it and mounts it at `/data`. The
-  container itself never gets a network.
-- **GPU passthrough**, behind a config flag and gated on the `nvidia` container runtime actually
-  being present — a node in CPU-fallback mode says so, and refuses jobs that demand a GPU.
-- **A provider dashboard** (`cleargate-node tui`): payments as they settle, jobs as they run, GPU
-  utilisation, and a pause key that stops selling without stopping running work.
-- A TypeScript renter CLI that signs Hedera payments, streams job output, and downloads results.
-- A smoke test that proves one real HBAR payment moves, kept green in CI.
+- **`POST /v1/sessions`**: pay for a Jupyter server in a container on the provider's GPU in small
+  chunks of credit, burned by the second. Stop early and the **unburned remainder comes back**,
+  paid automatically from the node's own operator account. Nothing of the renter's is uploaded;
+  their code and data stay on their machine.
+- **Paid only once it answers.** The node verifies the payment, starts the container, points a
+  tunnel at it and proves it is reachable before it settles — a session that never came up costs
+  nothing.
+- **A capped exposure.** One payment buys at most `leases.session_chunk_seconds` (five minutes by
+  default), so that is the most of a renter's money a provider ever holds ahead of the compute.
+- **Certificate access, no credential exchange.** The renter generates a keypair locally and sends
+  only the public half; the node's own CA signs it for one lease.
+- **A tunnel out of NAT** (`cloudflared`, run by the node), so a node needs no public IP, no port
+  forwarding and no Cloudflare account: every session is published through a quick tunnel.
+- **Freeze, then reap.** Running out of credit freezes the container rather than killing it, so a
+  renter who is mid-run and slow to top up does not lose their work.
+- **GPU passthrough**, always requested and gated on the `nvidia` container runtime actually being
+  present — a node in CPU-fallback mode says so, and refuses sessions that demand a GPU.
+- **A provider dashboard** (`cleargate-node tui`): payments as they settle, the session running now
+  and what is owed back, GPU utilisation, and a pause key that stops selling.
 
-Plus the discovery half of **M2**:
+What makes prepaying a stranger checkable:
+
+- **An HCS audit trail**: every settlement — and a burn checkpoint every fifteen seconds a session
+  runs, carrying what the node would owe if it stopped right now — is published to a Hedera
+  Consensus Service topic the provider owns. A provider who later refuses a refund is refusing a
+  number they already signed, repeatedly, before there was anything to argue about.
+- **ERC-8004 provider identity**: `cleargate-node register` gives a provider a persistent on-chain
+  agent id, and the node serves its own agent card at `/.well-known/agent-card.json`.
+
+Discovery:
 
 - **A registry** (`registry/`): Fastify and Postgres, holding one row per node, updated by
-  heartbeats. It is discovery only — it never receives, holds or forwards funds.
-- **A website** (`web/`): a page that hands a provider their install command, and a page that lists
-  every node with its GPU, price and limits.
-- **An installer** (`scripts/install.sh`): builds the daemon, configures it, and starts it announcing.
+  heartbeats. It is discovery only — it never receives, holds or forwards funds. `GET /v1/providers`
+  serves the same listings under the names an autonomous renter looks for.
+- **A website** (`web/`): a page that hands a provider their install command, a page that lists
+  every node with its GPU and session price, and a rent flow that pays from the renter's own wallet.
+- **An installer** (`scripts/install.sh`): builds the daemon, the lease image and the signing
+  sidecar, configures the node, and starts it announcing.
+- A smoke test that proves one real HBAR payment moves, kept green in CI.
 
-And the metered half of **M3**, **interactive leases** — the other way to buy compute here:
-
-- **`POST /v1/leases`**: pay by the minute for an SSH shell and a Jupyter server in a container on
-  the provider's GPU. Nothing of the renter's is uploaded; their code and data stay on their machine.
-- **Certificate access, no credential exchange.** The renter generates a keypair locally and sends
-  only the public half; the node's own CA signs it for one lease, expiring when the paid time does.
-- **A tunnel out of NAT** (`cloudflared`, run by the node), so a provider needs no public IP and no
-  port forwarding — and no Cloudflare account: the registry provisions it for them, or they use a
-  quick tunnel and need no account either.
-- **Freeze, then reap.** Missed extensions freeze the container rather than killing it, so a renter
-  who is mid-run and slow to pay does not lose their work.
-
-And **M4** — the parts that make this a marketplace an agent can use rather than only a person:
-
-- **Metered, refundable sessions** (`POST /v1/sessions`): pay for a small chunk of time at a time
-  and have the node burn it down by the second. Stop early and the **unburned remainder comes back**.
-  What makes that checkable rather than merely promised is the audit trail below: the node publishes
-  what it would owe you *right now*, every fifteen seconds your session runs, to a topic it cannot
-  edit. A provider who later refuses to refund is refusing a number they already signed, repeatedly,
-  before there was anything to argue about.
-  A session payment is capped at `leases.session_chunk_seconds` (five minutes by default) however
-  long a session you ask for, so that is the most of your money a provider ever holds ahead of the
-  compute it pays for.
-- **An HCS audit trail**: every settlement — and every session burn checkpoint — is published to a
-  Hedera Consensus Service topic the provider owns, so earnings and debts can be audited without
-  trusting this project's website or the provider's own node.
-- **ERC-8004 provider identity**: `cleargate-node register` gives a provider a persistent on-chain
-  agent id, and the node serves its own agent card at `/.well-known/agent-card.json`. A renting
-  agent can resolve and check a provider without going through our registry at all.
-- **`GET /v1/providers`**: the same listings under the names an autonomous renter looks for, carrying
-  the agent id, derived capabilities and per-second pricing.
-
-The rent-from-the-website flow is not built yet — paying still happens from the CLI.
+Batch jobs (`POST /v1/jobs`) and prepaid, non-refundable leases shipped in earlier milestones and were
+removed.
 
 ---
 
@@ -79,13 +68,13 @@ The rent-from-the-website flow is not built yet — paying still happens from th
                     │  holds the only private key  │
                     └───────┬──────────────▲───────┘
                             │              │
-              POST /v1/jobs │              │ 402 + PAYMENT-REQUIRED
+          POST /v1/sessions │              │ 402 + PAYMENT-REQUIRED
         PAYMENT-SIGNATURE   │              │ 200 + PAYMENT-RESPONSE
                             ▼              │
                     ┌───────────────────────────────┐
                     │  provider node (agent/, Go)   │
                     │  x402 resource server         │
-                    │  docker runner, no keys ever  │
+                    │  lease runner, no payout key  │
                     └───────┬───────────────────────┘
                             │ /verify  /settle  /supported
                             ▼
@@ -99,7 +88,7 @@ The rent-from-the-website flow is not built yet — paying still happens from th
 
 **The load-bearing rule:** the agent never holds a private key and never links a Hedera SDK. The
 merchant side of x402 needs only JSON construction and HTTP calls to the facilitator. All signing
-lives in the TypeScript renter client, which is where the only mature implementation of the Hedera
+lives in the TypeScript client package the website uses, which is where the only mature implementation of the Hedera
 exact scheme exists.
 
 | Component | Language | Why |
@@ -115,7 +104,7 @@ exact scheme exists.
 
 x402 v2. Note the header names — v1's `X-PAYMENT` pair is accepted on input but never emitted.
 
-1. **Renter asks for work.** `POST /v1/jobs` with a job spec, no payment.
+1. **Renter asks for a session.** `POST /v1/sessions` with how long and an SSH public key, no payment.
 2. **Node answers 402.** The challenge is base64 JSON in the `PAYMENT-REQUIRED` header, with
    `Cache-Control: no-store`. `extra.feePayer` is read from the facilitator's `GET /supported` on
    every challenge and never hardcoded — if it does not match, the client SDK throws before signing.
@@ -123,12 +112,11 @@ x402 v2. Note the header names — v1's `X-PAYMENT` pair is accepted on input bu
    base64-encoded into `PAYMENT-SIGNATURE`, and retries the request.
 4. **Node verifies.** It POSTs `{ x402Version, paymentPayload, paymentRequirements }` to the
    facilitator's `/verify`, checking against *its own* requirements, not the client's copy of them.
-5. **Node starts the container**, then **settles immediately**. Never the other way round, and never
-   after the job finishes: the signed payload expires at `maxTimeoutSeconds`, and a training run
-   outlives that window many times over. If settlement fails, the container is killed — the node
-   does not do unpaid work, and the renter is not charged.
-6. **Node returns 200** with the settlement receipt in `PAYMENT-RESPONSE` and a job token in the
-   body. The token — not the payment — authorizes logs and artifacts from then on.
+5. **Node starts the container, publishes it and proves it answers**, then **settles** — all inside
+   the payload's `maxTimeoutSeconds`. If anything before settlement fails, the container is torn
+   down and the renter is not charged.
+6. **Node returns 200** with the settlement receipt in `PAYMENT-RESPONSE`, the Jupyter link, and a
+   session token in the body. The token — not the payment — authorizes top-ups, state and stop.
 
 The settlement is written to the node's append-only `receipts.jsonl` the moment it lands, so a
 provider can audit earnings without trusting any website.
@@ -164,13 +152,14 @@ facilitator fee-payer mismatch.
 ### Run a provider node
 
 ```sh
-make agent
+make install && make agent && make lease-image
 ./bin/cleargate-node setup --pay-to 0.0.YOUR_ACCOUNT
 ./bin/cleargate-node serve
 ```
 
-`setup` preflights the facilitator, the Docker daemon and the GPU before writing `config.yaml`, so
-problems surface then rather than during someone's paid job. Without the NVIDIA Container Toolkit
+`setup` preflights the facilitator, Docker, the GPU, the lease image, `cloudflared` and the operator
+key before writing `config.yaml` — and waits while you fund that key with a few testnet HBAR — so
+problems surface then rather than during someone's paid session. Without the NVIDIA Container Toolkit
 the node runs in **CPU-fallback mode** — it says so loudly at startup and reports
 `gpu.available: false` in its specs, so nobody rents a GPU that is not there.
 
@@ -192,7 +181,7 @@ run the command it gives you on the machine with the GPU:
 
 ```sh
 PAY_TO=0.0.1234 \
-  PRICE_TINYBARS=100000 \
+  LEASE_PRICE_TINYBARS_PER_MINUTE=200000 \
   PUBLIC_URL=http://localhost:8402 \
   REGISTRY_URL=http://localhost:4400 \
   ./scripts/install.sh
@@ -200,10 +189,10 @@ PAY_TO=0.0.1234 \
 
 That builds the daemon, preflights Docker and the GPU, writes `config.yaml` and starts serving. The
 node announces itself immediately and every 30 seconds after, so it shows up at
-<http://localhost:3000/nodes> straight away — with its GPU, price, limits and payout account.
+<http://localhost:3000/nodes> straight away — with its GPU, session price, container and payout account.
 
 Listing is opt-in. Leave `REGISTRY_URL` out and the node is simply unlisted: renters who know its
-URL can still pay it. A registry that is down never interrupts a paid job.
+URL can still pay it. A registry that is down never interrupts a paid session.
 
 ### Renting the GPU out for real
 
@@ -217,30 +206,20 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 
 docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-docker pull pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
 ```
 
-Then set `gpu_enabled: true` and restart. `cleargate quote` will show the card instead of
-`CPU-fallback mode`.
+Then restart the node — `setup` already turned the GPU on; a config written before it did needs
+`gpu_enabled: true`. `GET /v1/specs` will show the card instead of `CPU-fallback mode`.
 
-### Selling interactive access too
+### The lease image
 
-Separate from the GPU flag, and separate on purpose: handing a stranger a live shell is a bigger ask
-than running their sandboxed batch job, so it never rides along with anything else.
-
-```sh
-LEASES=1 GPU=1 PAY_TO=0.0.1234 REGISTRY_URL=http://localhost:4400 \
-  bash scripts/install.sh
-```
-
-That adds three things to the install: `cloudflared` (fetched for you), a check that `ssh-keygen`
-exists, and a build of the lease images — which is slow, and only happens once.
-
-By hand instead of through the installer:
+Every node sells sessions, so the installer always fetches `cloudflared`, checks that `ssh-keygen`
+and `pnpm` exist, builds the signing sidecar, and builds the lease images — which is slow, and only
+happens once. By hand:
 
 ```sh
 make lease-image
-./bin/cleargate-node setup --enable-leases --tunnel-mode quick --pay-to 0.0.1234 --force
+./bin/cleargate-node setup --pay-to 0.0.1234 --force
 ```
 
 `make lease-image` picks its base from what the machine has: the CUDA base where
@@ -269,9 +248,8 @@ make lease-image LEASE_BASE_IMAGE=tensorflow/tensorflow:2.17.0-gpu
 
 `LEASE_EXTRA_PIP="…"` bakes additional packages into whichever base you pick.
 
-`--tunnel-mode quick` needs no Cloudflare account at all and gives renters Jupyter over a random
-hostname. `--tunnel-mode named` asks the registry to provision a stable tunnel for the node, which
-is what adds an SSH terminal — and needs a registry that has Cloudflare credentials configured.
+Leases are published through a Cloudflare quick tunnel: no Cloudflare account, a random hostname
+per lease, and Jupyter only — a quick tunnel carries no SSH.
 
 Setup generates this node's SSH certificate authority under `lease-ca`, beside `config.yaml`. The
 private half never leaves the machine and is never copied anywhere, the same rule that keeps this
@@ -280,67 +258,47 @@ issued would stop working.
 
 ### Rent from it
 
-Everything runs from the repo root:
+Browse `/nodes` on the website and open a node's listing. A node that sells interactive time has a
+rent flow there: connect a wallet, pick the minutes, and the browser signs the payment — nothing
+routes through the registry.
+
+Discovery is free, and so is asking the price:
 
 ```sh
-export PATH="$PWD/node_modules/.bin:$PATH"   # or prefix each command with `pnpm exec`
-
-cleargate quote --node http://localhost:8402
-cleargate run \
-  --node http://localhost:8402 \
-  --image python:3.11-slim \
-  --script examples/train.py \
-  --output result.tar
+curl -s http://localhost:8402/v1/specs
+curl -si -X POST http://localhost:8402/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d "{\"seconds\":300,\"public_key\":\"$(cat ~/.ssh/id_ed25519.pub)\"}"
 ```
 
-With a dataset, on a GPU:
+The second answers `402` with the price of one chunk in a `PAYMENT-REQUIRED` header.
 
-```sh
-cleargate run \
-  --node http://localhost:8402 \
-  --image pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime \
-  --gpu \
-  --script examples/train_mnist.py \
-  --dataset https://storage.googleapis.com/tensorflow/tf-keras-datasets/mnist.npz \
-  --dataset-sha256 731c5ac602752760c8e48fbffcf8c3b850d9dc2a2aedcf2cc48468fc17b673d1 \
-  --output model.tar
-```
+### What you get
 
-`quote` is free. `run` pays, streams the container's output live, and downloads the artifact.
+A session sends nothing of yours to the node — you get a shell and a Jupyter server
+on the provider's GPU, billed by the second, and your code and data never leave your machine.
 
-### Rent a shell instead
+The provider has to have opted in (`LEASES=1` at install); the `leases` block in the node's
+`/v1/specs`, and its listing on the website, say whether they did.
 
-`run` sends your code to the node. `rent` sends nothing — you get a shell and a Jupyter server on
-the provider's GPU for the minutes you buy, and your code and data never leave your machine.
-
-The provider has to have opted in (`LEASES=1` at install), and `cleargate quote` says whether they
-did.
-
-```sh
-cleargate rent --node http://localhost:8402 --minutes 30 --budget 50000000
-```
-
-That prints an `ssh` command and a URL to paste into Colab's **Connect to a local runtime**, then
-holds the lease open by buying another slice before each one lapses — stopping when your `--budget`
-would be passed. Ctrl-c stops the lease and stops paying.
+Rent from the node's page on the website. It gives you the Jupyter link, tops the session up as
+its credit runs low, and stopping it refunds what was not used.
 
 Two things are worth knowing before you rent:
 
 - **You get a root shell in a container, and it has a network — but an allowlisted one.** `pip`,
-  `conda`, `npm`, GitHub and Hugging Face work; arbitrary hosts do not. `cleargate quote` prints the
-  node's list.
+  `conda`, `npm`, GitHub and Hugging Face work; arbitrary hosts do not. `/v1/specs` lists them
+  under `leases.egress_allowlist`.
 - **Check `leases.gpu`, not `gpu.available`.** The first says a lease container can compute on the
   card; the second only says the host has one. They differ when a provider built their lease image
-  without CUDA, and `--gpu` refuses that node before you pay. PyTorch is preinstalled and ready;
+  without CUDA, and asking for a GPU refuses that node before you pay. PyTorch is preinstalled and ready;
   TensorFlow does not work on the GPU on a PyTorch-based lease image at all, by any route we
   measured — check what the node runs before renting for a TF workload.
-- **SSH depends on how the provider's tunnel is set up.** A node on a *named* tunnel gives you both
-  a terminal and Jupyter. A node on a *quick* tunnel — the zero-setup option, no Cloudflare account
-  — gives you Jupyter only. The quote and the rent output both say which.
+- **There is no SSH.** Every lease is published through a Cloudflare quick tunnel, which carries
+  HTTP only — so you get Jupyter, and Jupyter's own terminal.
 
 The certificate you get back is valid only for that lease, only until its paid time runs out. There
-is no key to revoke and nothing to clean up: extending re-signs a new one, and letting a lease lapse
-is how it ends.
+is no key to revoke and nothing to clean up: it lapses with the session.
 
 ---
 
@@ -351,26 +309,20 @@ Every endpoint states what authorizes it. New endpoints must do the same.
 | Method | Path | Authorization | Notes |
 |---|---|---|---|
 | `GET` | `/health` | free | liveness |
-| `GET` | `/v1/specs` | free | price, hardware, limits, allowlist — discovery must not cost money |
-| `POST` | `/v1/jobs` | **x402** | run one job; this is the call that moves HBAR. `503` while the operator has the node paused |
-| `GET` | `/v1/jobs/:id` | job token | status |
-| `GET` | `/v1/jobs/:id/logs` | job token | `?follow=1` for an SSE stream |
-| `GET` | `/v1/jobs/:id/artifact` | job token | the output directory as a tar |
-| `POST` | `/v1/jobs/:id/stop` | job token | kill early |
-| `POST` | `/v1/leases` | **x402** | buy interactive time, priced per minute. `404` on a node that did not opt into leasing |
-| `POST` | `/v1/leases/:id/extend` | **x402** + lease token | buy another slice; re-signs the certificate with the later expiry |
-| `GET` | `/v1/leases/:id` | lease token | status and seconds remaining — free, because it is what decides whether to pay again |
-| `POST` | `/v1/leases/:id/stop` | lease token | end the lease and stop the meter |
+| `GET` | `/v1/specs` | free | session terms, hardware, egress allowlist — discovery must not cost money |
+| `POST` | `/v1/sessions` | **x402** | open a metered session: one chunk of credit, burned by the second. `503` while the operator has the node paused |
+| `POST` | `/v1/sessions/:id/topup` | **x402** + session token | buy another chunk of credit |
+| `GET` | `/v1/sessions/:id` | session token | credit, burn and refund state — free, because it is what decides whether to top up |
+| `POST` | `/v1/sessions/:id/stop` | session token | end the session; the unburned credit is refunded |
 
-Access tokens are 32 random bytes, minted at settlement, scoped to one job or one lease, and
-compared in constant time. An unknown id and a wrong token both answer 404: whether a job or a lease
-exists is not something an unauthorized caller gets to learn.
+Access tokens are 32 random bytes, minted at settlement, scoped to one session, and compared in
+constant time. An unknown id and a wrong token both answer 404: whether a session exists is not something an unauthorized caller gets to learn.
 
-`POST /v1/leases` settles **after** a reachability check, not before: verify, start the container,
+`POST /v1/sessions` settles **after** a reachability check, not before: verify, start the container,
 sign the certificate, point the tunnel at it, prove the tunnel actually answers, *then* settle. A
 renter is never charged for a lease that never came up. That is also why the lease image has to be
-built before the node sells anything (`make lease-image`) — unlike a job, there is no `staging`
-phase to hide an image pull in.
+built before the node sells anything (`make lease-image`) — there is no phase after settlement
+to hide an image pull in.
 
 A lease moves `provisioning → active → paused → active`, and out through `stopped`, `expired` or
 `failed`. `paused` is a cgroup freeze, not a kill.
@@ -384,7 +336,6 @@ Discovery only. There is no payments table, no balance, and no route that moves 
 | `GET` | `/health` | free | liveness; what `setup` preflights against |
 | `POST` | `/v1/nodes/heartbeat` | node's listing token | upserts one node; the first beat claims the `node_id` |
 | `POST` | `/v1/nodes/:id/offline` | node's listing token | the node is stopping; go offline now |
-| `POST` | `/v1/nodes/:id/tunnel-token` | node's listing token | provisions this node's Cloudflare tunnel and DNS routes; `503` if this registry has no Cloudflare account |
 | `GET` | `/v1/nodes` | free | every node, online first; `?online=true` to filter |
 | `GET` | `/v1/nodes/:id` | free | one node |
 
@@ -395,43 +346,15 @@ reclaims it on its next heartbeat. The listing token is minted by
 `cleargate-node setup`, and the registry stores only its SHA-256 — it exists so nobody can repoint
 an established listing at their own machine, and it can never authorize a payment.
 
-A job moves `pending → staging → running → succeeded | failed | timeout | killed`. `staging` is
-after payment and before the container runs — pulling the image, downloading the dataset — and it is
-reported in `JobState.stage` and streamed over the same log feed, so a paid job is never silently
-stalled.
 
-The tunnel route is the only place Cloudflare credentials are ever used, and they live in the
-registry's environment (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`,
-`LEASE_DOMAIN` — see `registry/.env.example`). A provider never has a Cloudflare account and never
-sees anything but a token good for running their own one tunnel. Leave those variables unset and the
-registry still works: it answers 503 there, and nodes fall back to quick tunnels, which need no
-account at all. This does not put the registry in the payment path — it hands out a network route,
-and renters still pay nodes directly.
 
 ---
 
 ## The sandbox
 
-Untrusted code runs only in an allowlisted image, and:
-
-- `NetworkMode: none` — the job computes, it does not phone home. There is a test that fails if
-  network access ever leaks.
-- Read-only root filesystem, with three writable volumes: `/work` for the uploaded script, `/data`
-  for the staged dataset, `/out` for results.
-- Memory, CPU and PID caps; all capabilities dropped; `no-new-privileges`.
-- A wall-clock timeout, enforced by killing the container.
-- Container and volumes reaped after the artifact retention window, so one renter's data does not
-  linger on a provider's disk.
-
-Arbitrary user-supplied images are deliberately out of scope. Jobs do run as root *inside* the
-container — there is no user-namespace remapping yet, which is a known residual risk rather than
-something the tests cover.
-
-### The lease sandbox, and where it differs
-
-A lease cannot be `NetworkMode: none` — a renter with a shell has to be able to install a package —
-and it cannot have a read-only root for the same reason. Those two are the *only* relaxations, and
-what replaces them is stricter rather than looser:
+A session hands a paying stranger a shell, so the container cannot be `NetworkMode: none` — a renter
+has to be able to install a package — and it cannot have a read-only root for the same reason. What
+replaces them is strict:
 
 - **The container has no route off the machine.** It sits on a Docker network created with
   `Internal: true`. There is nothing to reach.
@@ -446,8 +369,7 @@ what replaces them is stricter rather than looser:
   destroyed at reap.
 
 Leases run as root inside the container, deliberately — a rented dev box where `apt-get` does not
-work is not a usable one — which makes user-namespace remapping matter more here than it does for
-jobs. The installer says so, and points at Docker's `userns-remap`.
+work is not a usable one — which makes user-namespace remapping matter. The installer says so, and points at Docker's `userns-remap`.
 
 Access is by certificate and nothing else. The container's `sshd` has no `authorized_keys` file: it
 trusts one CA (the node's own, generated locally at setup, private half never copied anywhere) and
@@ -456,63 +378,44 @@ signed by the same CA and still refused. Certificates expire when the paid time 
 there is no revocation list — a force-stopped lease has its container killed, so there is nothing
 left for a valid certificate to authenticate against.
 
-### Datasets, and why the node downloads them
-
-A job with no network cannot fetch its own training data, so the renter supplies a URL and the
-**node** fetches it. That puts a provider's daemon in the position of making arbitrary requests on
-behalf of a paying stranger, so `agent/internal/fetch` treats the URL as hostile:
-
-- https only by default; loopback, link-local (`169.254.169.254` — cloud metadata), private and
-  CGNAT addresses refused, **re-checked on every redirect hop** and again at dial time against the
-  address actually being connected to.
-- A size cap enforced both against the advertised `Content-Length` and by counting bytes as they
-  arrive, because a chunked response declares no length at all.
-- Optional `sha256`, verified while streaming.
-- Archives unpacked host-side, refusing path escapes (`../`), absolute paths and symlinks.
-
-An operator can opt into a LAN mirror with `dataset.allow_private`, or pin an allowlist of hosts.
-
 ### When payment happens, relative to the slow parts
 
 ```
-validate + preflight the dataset   →  400, and costs the renter nothing
-no payment header                  →  402 challenge
-header present                     →  /verify
-verified                           →  accept the job
-accepted                           →  /settle          ← immediately, well inside 300s
-settled                            →  receipt + job token returned
-background                         →  pull image, download dataset, run    ← job is "staging"
+validate the request         →  400, and costs the renter nothing
+no payment header            →  402 challenge, priced per chunk
+header present               →  /verify
+verified                     →  start the container, sign the certificate
+container up                 →  point the tunnel at it, prove it answers
+reachable                    →  /settle          ← inside the payload's 300s
+settled                      →  credit banked, burned by the second
+stopped or reaped            →  unburned credit refunded
 ```
 
-The signed payment payload expires at `maxTimeoutSeconds` (300s), and a dataset download plus a
-training run outlive that many times over — so settlement happens when the job is *accepted*, never
-when the work finishes.
+---
 
-Everything after settlement is unrefundable, which is why the checks that can be made in advance are
-made *before* the 402: the image allowlist, `require_gpu` against real GPU availability, and a `HEAD`
-preflight of the dataset URL. A job killed while staging genuinely stops, so a failed settlement
-never leaves the node finishing a download for a payment that did not land.
+## Deploying
+
+[`deploy/README.md`](deploy/README.md): the registry and Postgres on one server, the website on
+another, each started with a single `docker compose up -d --build` behind automatic HTTPS.
 
 ---
 
 ## Development
 
 [`TESTING.md`](TESTING.md) is the step-by-step runbook for verifying a build, from static
-checks through a real paid job to the sandbox tests. Every command in it runs from the repo root.
+checks through a real paid session. Every command in it runs from the repo root.
 
 
 ```sh
 make typecheck    # every TS package
-make test         # go tests, including real-Docker sandbox tests and the egress allowlist
+make test         # go tests, including the meter and the egress allowlist
 make lease-image  # the lease runtime and its egress proxy
 make smoke        # live payment against testnet — run before every PR
-make smoke-agent  # pay the running Go agent with the official TS client
 ```
 
-`make smoke-agent` is the test that matters most: it points the *official* `@x402/hedera` client at
-the Go agent. If the official client can pay our agent unmodified, the challenge is correct. There
-is also a golden-fixture test (`agent/internal/x402/challenge_test.go`) pinning the Go challenge to
-bytes captured from the reference `@x402/express` server.
+A golden-fixture test (`agent/internal/x402/challenge_test.go`) pins the Go challenge to bytes
+captured from the reference `@x402/express` server. There is no automated session smoke test yet;
+paying a real node from the website (TESTING.md step 12f) is that check.
 
 If a change makes `make smoke` fail, the change is wrong until proven otherwise.
 

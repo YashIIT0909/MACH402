@@ -63,15 +63,15 @@ func allowRequestedHeaders(r *http.Request) string {
 
 // preflightMaxAge is how long a browser may cache the preflight answer.
 //
-// Worth setting: without it every POST to /v1/leases costs an extra round trip
-// to the node, and a renter extending a lease on a timer pays that repeatedly.
+// Worth setting: without it every POST to /v1/sessions costs an extra round trip
+// to the node, and a session topping itself up on a timer pays that repeatedly.
 const preflightMaxAge = 24 * time.Hour
 
 // withCORS answers preflights and attaches the origin headers to every
 // response.
 //
 // Deliberately wrapping the whole mux rather than a subset of routes. A browser
-// that can read /v1/specs but not POST /v1/leases is a confusing half-state,
+// that can read /v1/specs but not POST /v1/sessions is a confusing half-state,
 // and the policy question — may this origin talk to this node at all — is the
 // same for every endpoint.
 func (s *Server) withCORS(next http.Handler) http.Handler {

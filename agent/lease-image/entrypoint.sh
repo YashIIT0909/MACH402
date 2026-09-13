@@ -66,7 +66,7 @@ cat > /etc/motd <<MOTD
   property of the image, not something to debug.
 
   If you need TensorFlow on a GPU, rent a node whose provider built their lease
-  image on a TensorFlow base. \`cleargate quote\` shows what a node runs.
+  image on a TensorFlow base. A node's free /v1/specs shows what it runs.
 
 MOTD
 

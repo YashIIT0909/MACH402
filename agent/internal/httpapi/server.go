@@ -53,17 +53,17 @@ type Server struct {
 	// to read what actually went onto the topic.
 	audit auditPublisher
 
-	// sessions is true when this node sells metered, refundable interactive
-	// time rather than direct-paid leases (leases.payment_mode: session). The
-	// /v1/sessions routes answer 404 without it.
+	// sessions is true when this node sells interactive time, which it only
+	// ever does as metered, refundable sessions. The /v1/sessions routes answer
+	// 404 without it.
 	sessions bool
-	// sidecar pays session refunds, and is present only when
-	// leases.self_settle is on. A nil sidecar means the node meters and
-	// publishes what it owes but cannot return it itself.
+	// sidecar pays session refunds. Nil only in tests and on a node whose
+	// sidecar could not be started; such a node meters and publishes what it
+	// owes but cannot return it itself.
 	sidecar *hedera.Sidecar
 
-	// paused stops the node selling new jobs without stopping the ones already
-	// running. The provider's dashboard toggles it; a renter sees a 503 with a
+	// paused stops the node selling new sessions without stopping the one
+	// already running. The provider's dashboard toggles it; a renter sees a 503 with a
 	// Retry-After rather than a challenge they would pay and regret.
 	paused atomic.Bool
 }
@@ -98,10 +98,9 @@ func (s *Server) EnableAudit(publisher *hcs.Publisher) {
 
 // EnableSessions turns on metered, refundable interactive time.
 //
-// sidecar may be nil, which means the node meters and publishes what it owes
-// but cannot pay a refund itself — leases.self_settle off. That is a weaker
-// offer, not a broken one, and it is the caller's choice to make rather than
-// something this silently upgrades.
+// sidecar pays the refunds. It may be nil, which means the node meters and
+// publishes what it owes but cannot pay a refund itself — the refund is then
+// logged as owed, with everything needed to pay it by hand.
 func (s *Server) EnableSessions(sidecar *hedera.Sidecar) {
 	s.sessions = true
 	s.sidecar = sidecar
@@ -119,13 +118,13 @@ func (s *Server) publishAudit(msg hcs.AuditMessage) {
 	s.audit.Publish(msg)
 }
 
-// EnableLeases attaches the two things a lease needs that a job does not: the
-// node's SSH certificate authority, and the tunnel that carries a renter's
-// connection in through NAT.
+// EnableLeases attaches the two things a lease needs: the node's SSH
+// certificate authority, and the tunnel that carries a renter's connection in
+// through NAT.
 //
-// It is a separate call rather than a New parameter because leasing is opt-in
-// per provider, and a node that never opted in must behave exactly as it did
-// before leases existed — including answering 404 on the /v1/leases routes.
+// It is a separate call rather than a New parameter because either can fail to
+// start, and a node without them must answer 404 on the /v1/sessions routes
+// rather than take payment for a session it cannot deliver.
 func (s *Server) EnableLeases(ca *sshca.CA, tunnels *tunnel.Manager) {
 	s.ca = ca
 	s.tunnel = tunnels
@@ -134,9 +133,9 @@ func (s *Server) EnableLeases(ca *sshca.CA, tunnels *tunnel.Manager) {
 // Reach reports where renters currently reach this node's leases, and whether
 // this node sells leases at all.
 //
-// For the provider's dashboard: the difference between a named tunnel and a
-// quick one is the difference between selling SSH and not, and it is not
-// something a provider should have to infer from a config file they wrote once.
+// For the provider's dashboard: the Jupyter URL a renter is on right now, and
+// whether leasing is on at all, without the provider having to go and read a
+// config file they wrote once.
 func (s *Server) Reach() (tunnel.Endpoints, bool) {
 	if s.tunnel == nil {
 		return tunnel.Endpoints{}, false
@@ -156,8 +155,7 @@ func (s *Server) Reach() (tunnel.Endpoints, bool) {
 // again — StopLease releases the node's single lease slot, so a re-lookup finds
 // nothing and refunds nobody. A metered session evicted here is charged for the
 // seconds it actually used and refunded the rest, exactly as if the renter had
-// stopped it themselves; a direct-paid lease forfeits its slice, which is the
-// same trade stopping one has always made.
+// stopped it themselves.
 func (s *Server) EndLease(ctx context.Context, status runner.LeaseStatus) (string, bool) {
 	lease, ok := s.runner.ActiveLease()
 	if !ok || lease.Status().IsTerminal() {
@@ -193,39 +191,22 @@ func (s *Server) emit(event runner.Event) {
 	s.runner.Publish(event)
 }
 
-// SetPaused stops or resumes accepting new jobs. Running jobs are unaffected.
+// SetPaused stops or resumes selling new sessions. A running one is unaffected.
 func (s *Server) SetPaused(paused bool) { s.paused.Store(paused) }
 
-// Paused reports whether the node is currently refusing new jobs.
+// Paused reports whether the node is currently refusing new sessions.
 func (s *Server) Paused() bool { return s.paused.Load() }
 
 // Handler returns the routed handler.
 //
 // Each route's payment status is stated here on purpose: every new endpoint has
-// to declare whether it is free, x402-gated, or job-token-gated.
+// to declare whether it is free, x402-gated, or session-token-gated.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// free
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /v1/specs", s.handleSpecs)
-
-	// x402-gated
-	mux.HandleFunc("POST /v1/jobs", s.handleCreateJob)
-	mux.HandleFunc("POST /v1/leases", s.handleCreateLease)
-	mux.HandleFunc("POST /v1/leases/{id}/extend", s.handleExtendLease)
-
-	// job-token-gated
-	mux.HandleFunc("GET /v1/jobs/{id}", s.handleJobState)
-	mux.HandleFunc("GET /v1/jobs/{id}/logs", s.handleJobLogs)
-	mux.HandleFunc("GET /v1/jobs/{id}/artifact", s.handleJobArtifact)
-	mux.HandleFunc("POST /v1/jobs/{id}/stop", s.handleJobStop)
-
-	// lease-token-gated. Reading and stopping a lease are both free: charging
-	// for the poll that decides whether to buy another slice would be absurd,
-	// and charging to stop would punish a renter for releasing the machine.
-	mux.HandleFunc("GET /v1/leases/{id}", s.handleLeaseState)
-	mux.HandleFunc("POST /v1/leases/{id}/stop", s.handleLeaseStop)
 
 	// x402-gated, and metered rather than forward-paid: each payment buys a
 	// chunk of credit the node burns down second by second and refunds the
@@ -316,17 +297,10 @@ func (s *Server) Heartbeat(ctx context.Context) nodespec.Heartbeat {
 	}
 }
 
-// newJobID returns a short, unguessable job identifier.
-func newJobID() string {
-	var raw [8]byte
-	_, _ = rand.Read(raw[:])
-	return hex.EncodeToString(raw[:])
-}
-
 // newLeaseID returns a short, unguessable lease identifier.
 //
 // It doubles as the SSH certificate principal, so it has to be unguessable for
-// the same reason the job token does: it is part of what scopes a renter's
+// the same reason the access token does: it is part of what scopes a renter's
 // access to their own session.
 func newLeaseID() string {
 	var raw [8]byte
@@ -335,7 +309,7 @@ func newLeaseID() string {
 }
 
 // newAccessToken mints the bearer token that scopes a renter to their own
-// purchase: one job's logs and artifact, or one lease's state and stop button.
+// purchase: one session's state, top-ups and stop button.
 // 32 bytes of randomness, issued only once the work exists.
 func newAccessToken() string {
 	var raw [32]byte
@@ -343,28 +317,14 @@ func newAccessToken() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// bearerToken pulls a job token out of the Authorization header, or the
-// `token` query parameter for EventSource, which cannot set headers.
+// bearerToken pulls a session token out of the Authorization header, or the
+// `token` query parameter for a client that cannot set headers.
 func bearerToken(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	if after, found := strings.CutPrefix(header, "Bearer "); found {
 		return strings.TrimSpace(after)
 	}
 	return r.URL.Query().Get("token")
-}
-
-// authorizeJob resolves a job and checks the caller's token.
-//
-// A wrong token and an unknown job both answer 404: whether a given job exists
-// is not something an unauthorized caller gets to learn.
-func (s *Server) authorizeJob(w http.ResponseWriter, r *http.Request) (*runner.Job, bool) {
-	id := r.PathValue("id")
-	job, found := s.runner.Get(id)
-	if !found || !job.AuthorizedBy(bearerToken(r)) {
-		writeError(w, http.StatusNotFound, "no such job, or the token does not authorize it")
-		return nil, false
-	}
-	return job, true
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -378,7 +338,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // Listen serves until the context is cancelled, then shuts down gracefully so
-// in-flight artifact downloads are not cut off.
+// in-flight requests are not cut off.
 func (s *Server) Listen(ctx context.Context) error {
 	server := &http.Server{
 		Addr:              s.cfg.ListenAddr,

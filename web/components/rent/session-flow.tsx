@@ -7,7 +7,6 @@ import {
   createWalletPayer,
   generateSSHKeypair,
   payFor,
-  type BrowserSSHKeypair,
   type SubtleCryptoLike,
 } from "@cleargate/client/browser";
 
@@ -15,22 +14,23 @@ import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet/wallet-provider";
 import { hbar } from "@/lib/registry";
 import { ConnectWallet } from "./connect-wallet";
-import { MinutesPicker } from "./lease-flow";
+import { MinutesPicker } from "./minutes-picker";
 import { SessionPanel, type SessionView } from "./session-panel";
 import { describe } from "./describe-error";
 
 /**
- * Buying interactive time on a node that meters it, from the browser.
+ * Buying interactive time from the browser — the only way it is sold.
  *
- * Mechanically this is `LeaseFlow`: the same x402 cycle, the same
- * validate-then-402-then-provision-then-settle order on the node. What is
- * different is what a payment buys and therefore what happens after. A lease
- * payment buys minutes that are gone whether used or not; a session payment
- * buys a *credit* the node burns down by the second, refunding the remainder
- * when the session ends. It is bought in a bounded first chunk
- * (`offer.chunk_seconds`) and topped up automatically as that credit runs low
- * — this component fires those top-ups itself, which means the wallet may
- * prompt again while a session is open. That is expected, not a bug.
+ * The order here is the node's order, not a UI convenience: the node validates
+ * the spec, answers 402, verifies, starts the container, signs the certificate,
+ * points the tunnel, *proves it is reachable*, and only then settles. A renter
+ * is never charged for a session that never came up. What a payment buys is a
+ * *credit* the node burns down by the second, refunding the remainder when the
+ * session ends. The renter chooses the session's length; it is paid for in
+ * chunks of at most `offer.chunk_seconds`, topped up automatically as each runs
+ * low until that length is covered — this component fires those top-ups
+ * itself, which means the wallet may prompt again while a session is open. That
+ * is expected, not a bug. The session ends when the chosen time is used.
  *
  * The thing that makes prepaying a stranger checkable is not this component:
  * it is that the node publishes what it owes, every fifteen seconds, to its
@@ -45,23 +45,26 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
   const chunkSeconds = offer.chunk_seconds ?? 300;
   const chunkCost = pricePerSecond * BigInt(chunkSeconds);
 
-  // The node never sells more than one chunk in a single payment — asking for
-  // more just gets you the chunk, and the session tops itself up automatically
-  // from there. `offer.max_minutes` bounds the session's *lifetime*, across
-  // every top-up, and has nothing to do with what one payment buys; using it
-  // as the slider's ceiling is what made the picker look like it controlled
-  // something it did not. The only real choice here is buying LESS than a full
-  // chunk to start — and only when the node's minimum actually allows that.
-  const pickerMaxMinutes = Math.max(1, Math.floor(chunkSeconds / 60));
+  // The picker chooses the session's length, within the node's own bounds. It
+  // is paid for in chunks of at most chunk_seconds — the most of a renter's
+  // money a node ever holds ahead of the compute — and the node stops taking
+  // top-ups once the chosen length is covered.
   const pickerMinMinutes = Math.max(1, Math.ceil(minSeconds / 60));
+  const pickerMaxMinutes = Math.max(pickerMinMinutes, offer.max_minutes);
   const hasChoice = pickerMinMinutes < pickerMaxMinutes;
 
-  const [minutes, setMinutes] = useState(pickerMaxMinutes);
+  const [minutes, setMinutes] = useState(() =>
+    Math.min(Math.max(30, pickerMinMinutes), pickerMaxMinutes),
+  );
+  const sessionSeconds = minutes * 60;
+  const totalCost = pricePerSecond * BigInt(sessionSeconds);
+  const firstPaymentSeconds = Math.min(sessionSeconds, chunkSeconds);
+  const payments = Math.ceil(sessionSeconds / chunkSeconds);
+
   const [requireGpu, setRequireGpu] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
-  const [identity, setIdentity] = useState<BrowserSSHKeypair | null>(null);
 
   // Guards the auto-top-up effect against firing twice for the same low-credit
   // moment while the first payment is still in flight — the poll that notices
@@ -89,7 +92,6 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
       const keypair = await generateSSHKeypair(
         window.crypto.subtle as unknown as SubtleCryptoLike,
       );
-      setIdentity(keypair);
 
       setBusy("Checking the node answers…");
       try {
@@ -111,7 +113,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          seconds: minutes * 60,
+          seconds: sessionSeconds,
           public_key: keypair.publicKey,
           require_gpu: requireGpu,
         }),
@@ -123,7 +125,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
     } finally {
       setBusy(null);
     }
-  }, [payer, node.public_url, minutes, requireGpu]);
+  }, [payer, node.public_url, sessionSeconds, requireGpu]);
 
   const topUp = useCallback(async () => {
     if (payer === null || session === null || session.token === undefined) return;
@@ -176,9 +178,9 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
    *
    * `low_credits` is computed by the node against its own threshold — which has
    * to clear its 15-second sweep interval plus a payment round trip — rather
-   * than guessed at here. This is the CLI's `holdSession` loop, moved into the
-   * browser: the wallet may prompt again mid-session, and that is the price of
-   * not making a renter babysit a tab to avoid being frozen mid-run.
+   * than guessed at here. The loop runs in the browser, so the wallet may prompt
+   * again mid-session, and that is the price of not making a renter babysit a
+   * tab to avoid being frozen mid-run.
    */
   useEffect(() => {
     if (session === null || session.token === undefined) return;
@@ -198,7 +200,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         setSession((current) =>
           current === null || current.session_id !== id ? current : { ...current, ...state },
         );
-        if (state.low_credits && state.status === "active" && payer !== null) {
+        if (state.low_credits && state.fully_paid !== true && state.status === "active" && payer !== null) {
           void topUp();
         }
       } catch {
@@ -224,7 +226,6 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
     return (
       <SessionPanel
         session={session}
-        identity={identity}
         node={node}
         busy={busy}
         error={error}
@@ -250,29 +251,27 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
           />
         ) : (
           <p className="text-sm text-muted-foreground">
-            This node sells metered time in fixed {chunkSeconds}-second chunks — there is nothing to
-            choose for the first payment. It renews itself in the same size as it runs low.
+            This node sells sessions of exactly {pickerMinMinutes} minutes.
           </p>
         )}
 
         <div className="border-y border-foreground/10 py-5">
           <div className="flex items-baseline justify-between gap-4">
-            <span className="type-label text-muted-foreground">
-              {hasChoice ? "This payment" : "Every payment"}
-            </span>
-            <span className="type-stat">
-              {hbar(hasChoice ? (pricePerSecond * BigInt(minutes * 60)).toString() : chunkCost.toString())} HBAR
-            </span>
+            <span className="type-label text-muted-foreground">{minutes}-minute session</span>
+            <span className="type-stat">{hbar(totalCost.toString())} HBAR</span>
           </div>
           <p className="mt-2 font-mono text-xs text-muted-foreground">
-            {hasChoice ? minutes * 60 : chunkSeconds}s of credit · {hbar(pricePerSecond.toString())} HBAR/s
-            {hasChoice ? ` (top-ups after this buy the full ${chunkSeconds}s chunk)` : ""}
+            {hbar(pricePerSecond.toString())} HBAR/s ·{" "}
+            {payments === 1
+              ? "one payment"
+              : `${payments} payments of up to ${hbar(chunkCost.toString())} HBAR`}
           </p>
           <p className="mt-3 text-xs text-muted-foreground">
-            Metered, not forward-paid: the node burns this credit by the second and{" "}
-            <strong className="text-foreground">refunds what you do not use</strong>. It tops up
-            automatically as it runs low — this is the most of your money the node ever holds ahead
-            of the compute it pays for.
+            {payments === 1
+              ? "One payment covers the whole session. "
+              : `The first payment buys ${firstPaymentSeconds}s, and the rest is bought automatically in chunks of up to ${chunkSeconds}s as each runs low — that is the most of your money the node ever holds ahead of the compute. `}
+            The session ends when your {minutes} minutes are used, and{" "}
+            <strong className="text-foreground">stopping early refunds what you did not use</strong>.
           </p>
         </div>
 
@@ -316,7 +315,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         ) : (
           <p className="text-xs text-destructive">
             This node reports no audit topic. Nothing but its word says what it owes you if you
-            stop early — consider a forward-paid lease instead if that matters to you.
+            stop early — consider another node if that matters to you.
           </p>
         )}
 
@@ -324,7 +323,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
 
         {wallet.status === "connected" ? (
           <Button onClick={open} disabled={busy !== null} size="lg" className="w-full">
-            {busy ?? `Start a session (${hasChoice ? minutes : chunkSeconds / 60} min)`}
+            {busy ?? `Start a ${minutes}-minute session`}
           </Button>
         ) : null}
 

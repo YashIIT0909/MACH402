@@ -2,7 +2,7 @@
  * Step 3 of the payment spike: pay for the resource and prove it settled.
  *
  * All Hedera signing in ClearGate lives on this side. The agent never holds a
- * key (CLAUDE.md invariant 1), so this file is the reference for `client/src/pay.ts`.
+ * key (CLAUDE.md invariant 1), so this file is the reference for `client/src/payment.ts`.
  */
 import { PrivateKey } from "@hiero-ledger/sdk";
 import { x402Client } from "@x402/core/client";
@@ -21,8 +21,8 @@ import { SMOKE_PORT, renterCredentials } from "./env.js";
  * (0.0.429274) and nothing else — capped at $1. Native HBAR ("0.0.0") is not a
  * recognized default asset, so a stock client refuses to pay our challenge with
  * no network request and no obvious error. Disabling the controls here is safe:
- * this is testnet, the price is fixed at 0.001 HBAR, and the renter CLI applies
- * its own explicit budget instead.
+ * this is testnet, the price is fixed at 0.001 HBAR, and the website's payer
+ * applies its own explicit per-payment cap instead.
  */
 export function buildPayingFetch(): typeof globalThis.fetch {
   const { accountId, privateKey, keyType } = renterCredentials();
@@ -52,9 +52,8 @@ export function readSettlement(response: Response): SettleResponse | null {
 /**
  * Pays for a resource and returns its settlement.
  *
- * `body`, when given, makes this a POST — which is how the same official client
- * exercises the Go agent's `POST /v1/jobs` as well as the reference server's
- * `GET /paid-hello`.
+ * `body`, when given, makes this a POST; the reference server's `GET /paid-hello`
+ * needs none.
  */
 export async function paySmokeResource(url: string, body?: unknown): Promise<SettleResponse> {
   const payingFetch = buildPayingFetch();

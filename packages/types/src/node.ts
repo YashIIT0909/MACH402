@@ -11,8 +11,6 @@ export type NodeSpec = {
   agent_version: string;
   /** Hedera account that receives payment. Payments are renter -> node, direct. */
   pay_to: string;
-  /** Flat price for one job, in tinybars, as a string. Never a float. */
-  price_tinybars: string;
   /** Facilitator this node settles through. */
   facilitator_url: string;
   /** CAIP-2 network, e.g. "hedera:testnet". */
@@ -25,15 +23,11 @@ export type NodeSpec = {
    */
   fee_payer?: string;
   gpu: GpuInfo;
-  limits: JobLimits;
-  /** Images this node is willing to run. Untrusted images are never accepted. */
-  image_allowlist: string[];
   /**
-   * Timed interactive access, if this node sells it.
+   * What this node sells: metered sessions on a container on its GPU.
    *
-   * Absent on a node that did not opt in — which is the default, because
-   * handing a stranger a live shell is a bigger trust ask than running their
-   * sandboxed batch job and must never be switched on as a side effect.
+   * Absent only on a node whose provider has leasing switched off, which sells
+   * nothing at all.
    */
   leases?: LeaseOffer;
 } & ProviderIdentity;
@@ -84,7 +78,7 @@ export type ProviderIdentity = {
 export type NodeHeartbeat = NodeSpec & {
   /** Absolute base URL renters use to reach this node, e.g. https://gpu.example. */
   public_url: string;
-  /** True while the operator has the node refusing new jobs. */
+  /** True while the operator has the node refusing new sessions. */
   paused: boolean;
 };
 
@@ -96,13 +90,4 @@ export type NodeListing = NodeHeartbeat & {
   last_seen_at: string;
   /** ISO 8601 timestamp of the first heartbeat ever seen from this node. */
   first_seen_at: string;
-};
-
-export type JobLimits = {
-  /** Wall-clock cap; the container is killed past this. */
-  max_seconds: number;
-  memory_mb: number;
-  cpu_cores: number;
-  /** Cap on the artifact tarball a renter can download. */
-  max_artifact_mb: number;
 };

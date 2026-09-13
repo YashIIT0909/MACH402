@@ -7,39 +7,53 @@ import { Button } from "@/components/ui/button";
 import { CONTAINER } from "./layout";
 import { Eyebrow, RevealedCode, useSectionReveal } from "./primitives";
 
+/*
+ * What an agent actually touches: three plain HTTP calls, no client to install.
+ * Field names are the node's real ones — `/v1/specs` is `nodespec.Spec`, the
+ * card is `httpapi.agentCard`, the challenge is the x402 v2 shape in CLAUDE.md.
+ */
 const examples = [
   {
-    label: "Quote",
-    code: `$ cleargate quote --node https://gpu.example
+    label: "Discover",
+    code: `$ curl -s https://gpu.example/v1/specs
 
-node        node_a1b2c3 (agent 0.1.0)
-price       0.001 HBAR per job (100000 tinybars)
-pay to      0.0.1234
-network     hedera:testnet, asset 0.0.0
-gpu         NVIDIA RTX 4090 (24576 MB)
-limits      3600s, 16384 MB, 8 cores`,
+{
+  "node_id": "node_a1b2c3",
+  "agent_version": "0.1.0",
+  "pay_to": "0.0.1234",
+  "network": "hedera:testnet",
+  "asset": "0.0.0",
+  "gpu": { "available": true, "model": "NVIDIA RTX 4090", "vram_mb": 24576 },
+  "leases": { "payment_mode": "session", "chunk_seconds": 300,
+              "price_tinybars_per_second": "3334", "jupyter": true },
+  ...
+}`,
   },
   {
-    label: "Run",
-    code: `$ cleargate run \\
-    --node https://gpu.example \\
-    --image python:3.11-slim \\
-    --script examples/train.py \\
-    --dataset https://example.com/set.tar.gz \\
-    --gpu \\
-    --budget 200000 \\
-    --output result.tar`,
+    label: "Challenge",
+    code: `$ curl -si -X POST https://gpu.example/v1/sessions \\
+    -H 'Content-Type: application/json' \\
+    -d '{"seconds":300,"public_key":"ssh-ed25519 AAAA…"}'
+
+HTTP/1.1 402 Payment Required
+PAYMENT-REQUIRED: <base64 PaymentRequired>
+
+# decoded accepts[0]: what one signature buys
+{ "scheme": "exact", "network": "hedera:testnet",
+  "amount": "1000200", "asset": "0.0.0",
+  "payTo": "0.0.1234", "maxTimeoutSeconds": 300 }`,
   },
   {
-    label: "Keys",
-    code: `# The renter is the only party with a key.
-# A node never sees it, and it is read
-# from the environment, never from disk.
+    label: "Identity",
+    code: `$ curl -s https://gpu.example/.well-known/agent-card.json
 
-$ export HEDERA_ACCOUNT_ID=0.0.1234
-$ export HEDERA_PRIVATE_KEY=302e0201...
-
-$ cleargate spend`,
+{
+  "url": "https://gpu.example",
+  "capabilities": { "cuda": true, "docker": true, "ssh": false, "jupyter": true },
+  "payments": { "scheme": "x402", "network": "hedera:testnet",
+                "asset": "0.0.0", "payTo": "0.0.1234", "refundable": true },
+  ...
+}`,
   },
 ];
 
@@ -76,9 +90,16 @@ export function DevelopersSection() {
   return (
     <section id="developers" ref={ref} className="relative overflow-hidden py-16 lg:py-24">
       <div className={CONTAINER}>
-        <div className="grid items-start gap-16 lg:grid-cols-2 lg:gap-24">
+        {/*
+         * `minmax(0, 1fr)`, not the implicit `auto`: a grid track sizes to its
+         * widest unbreakable content, and the code panel's longest line made
+         * the single phone column 582px wide on a 390px screen — cutting the
+         * title and lede off at the edge.
+         */}
+        <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-16 lg:grid-cols-2 lg:gap-24">
           <div
             data-reveal
+            className="min-w-0"
           >
             <Eyebrow className="mb-6">For developers</Eyebrow>
             <h2 className="mb-8 type-title">
@@ -92,13 +113,17 @@ export function DevelopersSection() {
               402 that says exactly what it wants, and one signature.
             </p>
 
-            <div className="grid grid-cols-2 gap-6">
-              {traits.map((trait, index) => (
-                <div
-                  key={trait.title}
-                  data-reveal
-                  style={{ transitionDelay: `${index * 50 + 200}ms` }}
-                >
+            <div className="grid gap-6 sm:grid-cols-2">
+              {/*
+               * Not `data-reveal` targets of their own. They sit inside the left
+               * column, which already reveals as one unit and carries them in.
+               * As nested targets of the same tween they were left at its start
+               * state — opacity 0, 24px down — on every load, so the four
+               * traits never appeared at all. The inline `transitionDelay` was a
+               * leftover from a CSS-transition reveal GSAP replaced.
+               */}
+              {traits.map((trait) => (
+                <div key={trait.title}>
                   <h3 className="mb-1 font-medium">{trait.title}</h3>
                   <p className="text-sm text-muted-foreground">{trait.description}</p>
                 </div>
@@ -107,7 +132,7 @@ export function DevelopersSection() {
           </div>
 
           <div
-            data-reveal className="lg:sticky lg:top-32"
+            data-reveal className="min-w-0 lg:sticky lg:top-32"
           >
             <div className="border border-foreground/10">
               <div className="flex items-center border-b border-foreground/10">

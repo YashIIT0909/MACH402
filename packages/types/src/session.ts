@@ -2,12 +2,11 @@
  * Metered sessions: interactive time bought in chunks, with the unburned
  * remainder refundable.
  *
- * A session buys the same thing a lease does — an SSH shell and a Jupyter
- * server on a provider's GPU — and differs only in how it is paid for. A lease
- * pays forward per slice and never refunds. A session pays forward per chunk
- * *into a credit*, the node burns that credit second by second while the
- * container is actually running, and whatever is left when the session ends is
- * transferred back to the renter.
+ * A session is how interactive time on a provider's GPU is sold — a container
+ * reached through Jupyter. The renter pays forward per chunk *into a credit*,
+ * the node burns that credit second by second while the container is actually
+ * running, and whatever is left when the session ends is transferred back to
+ * the renter.
  *
  * The honest description of the trust shape: this is forward payment with a
  * provider-issued refund, not an escrow. The node holds the money between the
@@ -27,14 +26,18 @@
 
 /** What a renter asks for when opening a session. */
 export interface SessionSpec {
-    /** How long to buy up front, in seconds. Bounded by the node's offer. */
+    /**
+     * The session's length, in seconds, within the node's `min_minutes` and
+     * `max_minutes`. It is paid for in chunks of at most `chunk_seconds`, and
+     * the session ends once this much time has been used.
+     */
     seconds: number;
     /** The renter's SSH public key. The private half never leaves their machine. */
     public_key: string;
     require_gpu?: boolean;
 }
 
-/** The 200 body of a paid POST /v1/sessions. Mirrors LeaseCreated. */
+/** The 200 body of a paid POST /v1/sessions. */
 export interface SessionCreated {
     session_id: string;
     lease_id: string;
@@ -49,7 +52,7 @@ export interface SessionCreated {
 
     jupyter_url: string;
     jupyter_token: string;
-    tunnel_mode: "named" | "quick" | "off";
+    tunnel_mode: "quick";
 
     /** The facilitator's settlement for the chunk just bought. */
     transaction: string;
@@ -64,6 +67,10 @@ export interface SessionCreated {
     low_credits: boolean;
     /** Seconds the credit currently buys. */
     seconds: number;
+    /** The session length chosen, in seconds. Absent on nodes older than this field. */
+    session_seconds?: number;
+    /** True once every chunk of the chosen length has been bought; no more top-ups follow. */
+    fully_paid?: boolean;
 }
 
 /** A session runs through the same states a lease does. */
@@ -88,6 +95,10 @@ export interface SessionState {
     expires_at: string;
     seconds_remaining: number;
     paid_seconds: number;
+    /** The session length chosen, in seconds. Absent on nodes older than this field. */
+    session_seconds?: number;
+    /** True once every chunk of the chosen length has been bought; no more top-ups follow. */
+    fully_paid?: boolean;
     gpu: boolean;
 
     price_tinybars_per_second: string;

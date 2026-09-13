@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import type * as THREE_NS from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-import { createPixelLens, type PixelLens } from "./pixel-lens";
-
 /**
  * The RTX 3080 that sits in the hero.
  *
@@ -30,7 +28,16 @@ const MAX_PITCH = 0.14;
 /** Fraction of the remaining distance covered per frame at 60fps. */
 const DAMPING = 0.045;
 
-const PARTICLE_COUNT = 380;
+const PARTICLE_COUNT = 1600;
+/**
+ * Base opacity of the dust cloud, before the scroll thins it.
+ *
+ * Higher than it looks because each speck is a soft radial falloff rather than
+ * a hard dot: most of a sprite's area is nearly transparent, and what makes
+ * the cloud read is many of them overlapping additively. Raised alongside the
+ * size cut — a speck a sixth of the area needs the help to stay visible.
+ */
+const PARTICLE_OPACITY = 0.62;
 /**
  * Camera pull-back beyond a perfect fit. Above 1 the card sits inside the
  * frame with air around it; at 1 it touches the edges exactly.
@@ -143,17 +150,6 @@ export function GpuModel({
         renderer.domElement.remove();
       });
       if (abandon()) return;
-
-      /*
-       * The patch of pixelation under the cursor. Off entirely under reduced
-       * motion, where a dissolving image is the kind of thing being asked about.
-       */
-      let lens: PixelLens | null = null;
-      if (!still) {
-        const initial = size();
-        lens = createPixelLens(THREE, renderer, initial.width, initial.height);
-        undo.push(() => lens?.dispose());
-      }
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(32, size().width / size().height, 0.01, 100);
@@ -352,6 +348,14 @@ export function GpuModel({
       const span = new Float32Array(PARTICLE_COUNT);
       const points = new Float32Array(PARTICLE_COUNT * 3);
       const alpha = new Float32Array(PARTICLE_COUNT);
+      /* Static size multiplier per mote, read by the vertex shader. */
+      const scale = new Float32Array(PARTICLE_COUNT);
+      /*
+       * Brightness paired to that size, and inverse to it. A big mote spread
+       * over several times the area at the same brightness is a blob; at a
+       * fraction of it, it is haze the small ones sit inside.
+       */
+      const weight = new Float32Array(PARTICLE_COUNT);
 
       const sourceCount = sources.length / 3 || 1;
       for (let i = 0; i < PARTICLE_COUNT; i++) {
@@ -359,37 +363,80 @@ export function GpuModel({
         seeds[i * 3] = sources[s] ?? 0;
         seeds[i * 3 + 1] = sources[s + 1] ?? 0;
         seeds[i * 3 + 2] = sources[s + 2] ?? 0;
-        drift[i * 3] = (Math.random() - 0.5) * 0.02;
-        drift[i * 3 + 1] = 0.012 + Math.random() * 0.03;
-        drift[i * 3 + 2] = (Math.random() - 0.5) * 0.02;
-        span[i] = 2.2 + Math.random() * 3.0;
+        // Wider lateral spread and a slower climb than the rise alone would
+        // give: the cloud should open out as it leaves the card rather than
+        // streaming off the top of it.
+        drift[i * 3] = (Math.random() - 0.5) * 0.044;
+        drift[i * 3 + 1] = 0.010 + Math.random() * 0.026;
+        drift[i * 3 + 2] = (Math.random() - 0.5) * 0.044;
+        span[i] = 2.8 + Math.random() * 3.6;
         life[i] = Math.random() * span[i];
+
+        // A narrow spread, skewed small. Dust is one population: a wide range
+        // here is what made a handful of specks read as blobs sitting on top of
+        // the rest rather than as the same cloud seen at different depths.
+        const s2 = Math.random();
+        scale[i] = 0.7 + s2 * s2 * 1.1;
+        weight[i] = 1 / (0.5 + scale[i]);
       }
 
       const particleGeometry = new THREE.BufferGeometry();
       particleGeometry.setAttribute("position", new THREE.BufferAttribute(points, 3));
       particleGeometry.setAttribute("aAlpha", new THREE.BufferAttribute(alpha, 1));
+      particleGeometry.setAttribute("aScale", new THREE.BufferAttribute(scale, 1));
 
       const particleMaterial = new THREE.PointsMaterial({
         color: ACCENT,
+        // The base every speck's own `aScale` multiplies. Small: this is dust,
+        // and the sprite being a gaussian already spends part of that footprint
+        // on falloff rather than on a visible core.
         size: 0.0055,
         sizeAttenuation: true,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
-        opacity: 0.34,
+        opacity: PARTICLE_OPACITY,
       });
 
-      // Per-particle fade, which PointsMaterial has no uniform for.
+      /*
+       * Three things PointsMaterial has no uniform for: a per-particle fade, a
+       * per-particle size, and a soft edge.
+       *
+       * The last is what keeps a brighter, denser cloud from reading as grit.
+       * An unmapped point is a flat quad with hard corners, so raising its size
+       * and opacity gives bigger, harder squares. A gaussian falloff across
+       * `gl_PointCoord` spends the extra size on diffusion instead — and the
+       * discard past the radius keeps the corners out of the additive sum,
+       * where they would otherwise build into visible boxes wherever motes
+       * overlap.
+       */
       particleMaterial.onBeforeCompile = (shader) => {
         shader.vertexShader = shader.vertexShader
-          .replace("#include <common>", "#include <common>\nattribute float aAlpha;\nvarying float vAlpha;")
-          .replace("#include <begin_vertex>", "#include <begin_vertex>\nvAlpha = aAlpha;");
+          .replace(
+            "#include <common>",
+            "#include <common>\nattribute float aAlpha;\nattribute float aScale;\nvarying float vAlpha;",
+          )
+          .replace("#include <begin_vertex>", "#include <begin_vertex>\nvAlpha = aAlpha;")
+          .replace("gl_PointSize = size;", "gl_PointSize = size * aScale;")
+          // After the size-attenuation block, not before it: `size` is in world
+          // units there and only becomes pixels once it has been divided by
+          // depth. A floor applied early would read as 1.0 world units — a
+          // speck the size of the card.
+          .replace(
+            "#include <logdepthbuf_vertex>",
+            "gl_PointSize = max( gl_PointSize, 1.0 );\n#include <logdepthbuf_vertex>",
+          );
         shader.fragmentShader = shader.fragmentShader
           .replace("#include <common>", "#include <common>\nvarying float vAlpha;")
           .replace(
             "#include <opaque_fragment>",
-            "gl_FragColor.a *= vAlpha;\n#include <opaque_fragment>",
+            [
+              "float d = length( gl_PointCoord - vec2( 0.5 ) ) * 2.0;",
+              "if ( d > 1.0 ) discard;",
+              "float fall = exp( - d * d * 3.8 ) * ( 1.0 - d * d );",
+              "gl_FragColor.a *= vAlpha * fall;",
+              "#include <opaque_fragment>",
+            ].join("\n"),
           );
       };
 
@@ -425,27 +472,11 @@ export function GpuModel({
         const ny = (event.clientY / window.innerHeight) * 2 - 1;
         targetRotation.y = nx * MAX_YAW;
         targetRotation.x = ny * MAX_PITCH;
-
-        // The patch, though, is placed in the frame's own coordinates — and
-        // WebGL's v axis runs the other way to the page's.
-        if (lens) {
-          const box = host.getBoundingClientRect();
-          lens.setPointer(
-            (event.clientX - box.left) / box.width,
-            1 - (event.clientY - box.top) / box.height,
-          );
-        }
       };
-
-      const onPointerLeave = () => lens?.clearPointer();
 
       if (!still) {
         window.addEventListener("pointermove", onPointerMove, { passive: true });
-        document.addEventListener("pointerleave", onPointerLeave);
-        undo.push(() => {
-          window.removeEventListener("pointermove", onPointerMove);
-          document.removeEventListener("pointerleave", onPointerLeave);
-        });
+        undo.push(() => window.removeEventListener("pointermove", onPointerMove));
       }
 
       // ---- scroll speed --------------------------------------------------
@@ -498,7 +529,6 @@ export function GpuModel({
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
         fit();
-        lens?.resize(width, height);
       };
       const resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
@@ -536,7 +566,7 @@ export function GpuModel({
         pivot.rotation.y = currentRotation.y - p * 0.45;
         camera.position.z = baseZ;
         renderer.toneMappingExposure = 0.68 - 0.34 * p;
-        particleMaterial.opacity = 0.34 * (1 - 0.6 * p);
+        particleMaterial.opacity = PARTICLE_OPACITY * (1 - 0.6 * p);
 
         /*
          * Scroll drives the fans. The impulse decays fast so they wind down
@@ -559,20 +589,28 @@ export function GpuModel({
           const t = life[i];
           const progress = t / span[i];
 
-          points[i * 3] = seeds[i * 3] + drift[i * 3] * t + Math.sin(t * 1.9 + i) * 0.006;
+          // The wander grows with age rather than being constant, so motes
+          // separate from their neighbours the further they get from the card.
+          points[i * 3] = seeds[i * 3] + drift[i * 3] * t + Math.sin(t * 1.3 + i) * 0.013 * t;
           points[i * 3 + 1] = seeds[i * 3 + 1] + drift[i * 3 + 1] * t;
-          points[i * 3 + 2] = seeds[i * 3 + 2] + drift[i * 3 + 2] * t;
+          points[i * 3 + 2] =
+            seeds[i * 3 + 2] + drift[i * 3 + 2] * t + Math.cos(t * 1.1 + i * 0.7) * 0.010 * t;
 
-          // Fade in, hold, fade out — with a sparkle riding on top.
-          const envelope = Math.sin(progress * Math.PI);
-          const sparkle = 0.55 + 0.45 * Math.sin(t * 7.3 + i * 1.7);
-          alpha[i] = envelope * sparkle;
+          /*
+           * Fade in, hold, fade out. Flattened against the plain sine so a mote
+           * spends most of its life at full brightness instead of most of it
+           * arriving or leaving — that hold is most of what makes the cloud
+           * present. The shimmer on top is shallow and slow for the same
+           * reason: a fast, deep one twinkles, which reads as sharp.
+           */
+          const envelope = Math.pow(Math.sin(progress * Math.PI), 0.6);
+          const shimmer = 0.82 + 0.18 * Math.sin(t * 2.6 + i * 1.7);
+          alpha[i] = envelope * shimmer * weight[i];
         }
         particleGeometry.attributes.position.needsUpdate = true;
         particleGeometry.attributes.aAlpha.needsUpdate = true;
 
-        if (lens) lens.render(scene, camera, delta);
-        else renderer.render(scene, camera);
+        renderer.render(scene, camera);
       };
 
       if (still) {

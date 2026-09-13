@@ -16,7 +16,6 @@ const footerLinks: Record<
     { name: "How it works", href: "/#how-it-works" },
   ],
   Developers: [
-    { name: "The CLI", href: "/#developers" },
     { name: "Agent API", href: "/#developers" },
   ],
   Protocol: [
@@ -51,7 +50,7 @@ export function FooterSection() {
               </Link>
 
               <p className="mb-8 max-w-xs leading-relaxed text-muted-foreground">
-                Rent an idle GPU by the job, settled with x402 payments on Hedera. Renters pay the
+                Rent an idle GPU by the second, settled with x402 payments on Hedera. Renters pay the
                 node directly.
               </p>
 

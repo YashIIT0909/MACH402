@@ -33,17 +33,15 @@ export type ProviderView = {
   capabilities: string[];
 
   pricing: {
-    /** Flat price of one batch job. */
-    per_job_tinybars: string;
     /**
      * Interactive time, per second. Null on a node that sells no interactive
      * time at all.
      */
     per_second_tinybars: string | null;
     /**
-     * Whether unused interactive time is refunded. False means this node's
-     * interactive time is forward-paid per slice and stopping early forfeits
-     * the remainder — a real difference an agent should price in.
+     * Whether unused time is refunded. True on every current node; false means
+     * an older build that sold prepaid slices with no refund, which current
+     * clients do not buy.
      */
     refundable: boolean;
     /**
@@ -126,7 +124,6 @@ export function toProviderView(node: NodeListing): ProviderView {
     capabilities: capabilitiesOf(node),
 
     pricing: {
-      per_job_tinybars: node.price_tinybars,
       per_second_tinybars: perSecond,
       refundable: metered,
       chunk_seconds: metered ? (node.leases?.chunk_seconds ?? null) : null,

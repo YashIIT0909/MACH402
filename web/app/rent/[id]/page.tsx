@@ -41,8 +41,8 @@ export default async function RentPage({ params }: { params: Promise<{ id: strin
         title={node.gpu.model ?? (node.gpu.available ? "GPU node" : "CPU node")}
       >
         You pay this node directly — the registry only records where it is. Your code and data never
-        leave your machine: a lease gives you a container on the provider&apos;s hardware and you
-        connect to it.
+        leave your machine: a session gives you a container on the provider&apos;s hardware, billed by
+        the second, and whatever credit you do not use comes back when you stop.
       </PageHero>
 
       <section className="py-16 lg:py-24">
@@ -97,8 +97,14 @@ function Specs({ node }: { node: NodeListing }) {
             <Row label="Rate">
               <span className="font-mono">{hbar(offer.price_tinybars_per_minute)} HBAR / min</span>
               <Sub>
-                {offer.min_minutes}–{offer.max_minutes} minutes per slice, {offer.max_total_minutes}{" "}
-                total
+                Billed by the second
+                {offer.price_tinybars_per_second !== undefined
+                  ? ` at ${hbar(offer.price_tinybars_per_second)} HBAR / s`
+                  : ""}
+                , paid in chunks of up to {Math.round((offer.chunk_seconds ?? 300) / 60)} minutes and
+                topped up as you go. Unused credit is refunded when you stop. Sessions run{" "}
+                {offer.min_minutes}–{offer.max_minutes} minutes, {offer.max_total_minutes} at most with
+                top-ups.
               </Sub>
             </Row>
 
@@ -110,15 +116,10 @@ function Specs({ node }: { node: NodeListing }) {
             </Row>
 
             <Row label="Access">
-              <span>
-                {offer.jupyter ? "Jupyter" : null}
-                {offer.jupyter && offer.ssh ? " · " : null}
-                {offer.ssh ? "SSH" : null}
-              </span>
+              <span>Jupyter</span>
               <Sub>
-                {offer.ssh
-                  ? "A browser uses Jupyter; SSH needs cloudflared on your machine."
-                  : "This node's tunnel carries HTTP only, so there is no SSH — Jupyter includes a terminal."}
+                Published through a Cloudflare quick tunnel, which carries HTTP only, so there is no
+                SSH — Jupyter includes a terminal.
               </Sub>
             </Row>
 

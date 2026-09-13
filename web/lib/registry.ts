@@ -65,8 +65,3 @@ export async function fetchNode(nodeId: string): Promise<NodeResult> {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
-
-/** Multiplies a per-minute tinybar price by minutes without touching a float. */
-export function totalTinybars(perMinute: string, minutes: number): string {
-  return (BigInt(perMinute) * BigInt(minutes)).toString();
-}

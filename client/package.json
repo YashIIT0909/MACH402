@@ -3,16 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "cleargate": "./bin/cleargate.mjs"
-  },
-  "//": "Only the browser entry is exported. The CLI's own modules reach env.ts, which imports dotenv and node:fs at module scope and would break a bundle; keeping the subpath narrow means the website cannot import them by accident.",
+  "//": "Only the browser entry is exported. env.ts, which the parked escrow.ts reads its key through, imports dotenv and node:fs at module scope and would break a bundle; keeping the subpath narrow means the website cannot import it by accident.",
   "exports": {
     "./browser": "./src/browser/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "cli": "tsx src/cli.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@cleargate/types": "workspace:*",
@@ -20,10 +16,8 @@
     "@x402/core": "2.25.0",
     "@x402/fetch": "2.25.0",
     "@x402/hedera": "2.25.0",
-    "commander": "15.0.0",
     "dotenv": "17.4.2",
-    "long": "5.3.2",
-    "tsx": "4.23.13"
+    "long": "5.3.2"
   },
   "devDependencies": {
     "@types/node": "22.20.2",

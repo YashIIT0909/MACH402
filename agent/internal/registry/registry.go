@@ -2,9 +2,9 @@
 // on the website.
 //
 // The registry is discovery only. It never receives, holds or forwards funds
-// (CLAUDE.md invariant 3), and it has no say in whether a job runs: payments go
-// renter -> node, direct. So every failure here is logged and shrugged off. A
-// registry outage must never stop a node selling or finishing a paid job.
+// (CLAUDE.md invariant 3), and it has no say in whether a session runs: payments
+// go renter -> node, direct. So every failure here is logged and shrugged off. A
+// registry outage must never stop a node selling or finishing a paid session.
 package registry
 
 import (
@@ -162,7 +162,7 @@ func (a *Announcer) beat(ctx context.Context) {
 	a.mu.Unlock()
 
 	if err != nil {
-		a.log.Warn("registry heartbeat failed; the node still sells jobs normally",
+		a.log.Warn("registry heartbeat failed; the node still sells sessions normally",
 			"registry", a.baseURL, "error", err)
 		return
 	}

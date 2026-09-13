@@ -60,8 +60,6 @@ func (m *Model) tabView(width, height int) string {
 	switch m.tab {
 	case tabOverview:
 		content = m.overviewView(width, height)
-	case tabJobs:
-		content = m.jobsView(width, height)
 	case tabLeases:
 		content = m.leasingView(width, height)
 	case tabActivity:
@@ -104,7 +102,7 @@ func (m *Model) statusBar(width int) string {
 }
 
 // tabStrip carries a badge per tab, so a provider on the Overview can see that
-// three jobs are running or that a session is live without switching to look.
+// a session is live without switching to look.
 func (m *Model) tabStrip(width int) string {
 	parts := make([]string, 0, len(tabOrder))
 	for i, t := range tabOrder {
@@ -124,10 +122,6 @@ func (m *Model) tabStrip(width int) string {
 
 func (m *Model) tabBadge(t tab) string {
 	switch t {
-	case tabJobs:
-		if live := m.runningJobs(); live > 0 {
-			return styleRunning.Render(fmt.Sprintf("(%d)", live))
-		}
 	case tabLeases:
 		if !m.runner.LeasesEnabled() {
 			return styleDim.Render("(off)")
@@ -153,10 +147,8 @@ func (m *Model) footer(width int) string {
 		return "\n  " + styleWarn.Render(truncate(m.statusFlash, width-4)) + "\n"
 	}
 
-	keys := []string{"1-5/tab screens"}
+	keys := []string{"1-4/tab screens"}
 	switch m.tab {
-	case tabJobs, tabOverview:
-		keys = append(keys, "↑↓ select", "x kill job")
 	case tabLeases:
 		keys = append(keys, "e end lease")
 	case tabActivity:
@@ -198,26 +190,22 @@ func (m *Model) helpView(width int) string {
 
 	b.WriteString(indent(cardRow(width-2, card{"screens", lines(
 		kv("1 Overview", "earnings, this machine, and who can reach it"),
-		kv("2 Jobs", "the job table, what each one is doing, and its output"),
-		kv("3 Leasing", "the shell or notebook a renter has on this box right now"),
-		kv("4 Activity", "every payment and state change, filterable"),
-		kv("5 Node", "the configuration this node is actually running under"),
+		kv("2 Leasing", "the shell or notebook a renter has on this box right now"),
+		kv("3 Activity", "every payment and state change, filterable"),
+		kv("4 Node", "the configuration this node is actually running under"),
 		"",
 		kv("tab / ←→", "next or previous screen"),
 	)})))
 
 	b.WriteString(indent(cardRow(width-2, card{"controls", lines(
-		kv("↑ ↓ / j k", "move the selection, or scroll the activity feed"),
-		kv("p", "pause or resume selling. Work already running continues;"),
+		kv("↑ ↓ / j k", "scroll the activity feed"),
+		kv("p", "pause or resume selling. A session already running continues;"),
 		kv("", "new requests get a 503 instead of a 402, so nobody pays"),
 		kv("", "for something this node will not start."),
-		kv("x", "kill the selected job. Flat-fee jobs are paid up front,"),
-		kv("", "so the renter is "+styleBad.Render("not refunded")+"."),
-		kv("e", "end the lease running now. A metered session is charged"),
-		kv("", "for the seconds it used and refunded the rest; a"),
-		kv("", "direct-paid lease forfeits its slice."),
+		kv("e", "end the session running now. The renter is charged for"),
+		kv("", "the seconds they used and refunded the rest."),
 		kv("", ""),
-		kv("", styleDim.Render("x and e ask once more before acting.")),
+		kv("", styleDim.Render("e asks once more before acting.")),
 		kv("f", "on Activity, cycle what the feed shows"),
 		kv("g / G", "on Activity, jump to the oldest kept line or back to live"),
 		kv("? / q", "close this help / stop the node"),
@@ -231,21 +219,6 @@ func (m *Model) helpView(width int) string {
 		"display, on the registry, or on our website.") + "\n\n")
 	b.WriteString(" " + styleDim.Render("press any key to go back") + "\n")
 	return b.String()
-}
-
-func statusStyle(status runner.Status) lipgloss.Style {
-	switch status {
-	case runner.StatusRunning:
-		return styleRunning
-	case runner.StatusStaging, runner.StatusPending:
-		return styleDim
-	case runner.StatusSucceeded:
-		return styleGood
-	case runner.StatusFailed, runner.StatusTimeout, runner.StatusKilled:
-		return styleBad
-	default:
-		return lipgloss.NewStyle()
-	}
 }
 
 func leaseStatusStyle(status runner.LeaseStatus) lipgloss.Style {

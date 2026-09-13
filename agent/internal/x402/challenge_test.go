@@ -66,7 +66,7 @@ func TestChallengeMatchesReferenceServer(t *testing.T) {
 func TestEncodeChallengeIsBase64JSON(t *testing.T) {
 	challenge := &PaymentRequired{
 		X402Version: Version,
-		Resource:    ResourceInfo{URL: "http://node.example/v1/jobs"},
+		Resource:    ResourceInfo{URL: "http://node.example/v1/sessions"},
 		Accepts: []PaymentRequirements{{
 			Scheme:            SchemeExact,
 			Network:           HederaTestnet,
