@@ -163,6 +163,7 @@ make dev-node       # run an agent locally, headless (what systemd runs)
 make dev-tui        # run an agent locally with the provider dashboard
 make registry-db    # start the registry's Postgres in docker
 make dev-registry   # run the discovery registry on :4400
+make registry-up    # both of those in one command, in order
 make dev-web        # run the website on :3000
 make test           # go tests
 make typecheck      # typecheck every TS package
