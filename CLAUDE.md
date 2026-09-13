@@ -258,6 +258,11 @@ second by second, and owes back whatever is unburned. It is the only way interac
 - **The chunk cap bounds the exposure.** `leases.session_chunk_seconds` (default 300) is the most
   time one payment ever buys, whatever the renter asked for; they get a chunk and top up. Widening
   it widens the only real gap in this design, so it is not a performance knob.
+- **The renter chooses the session length, and the session ends there.** `seconds` on
+  `POST /v1/sessions` (within `min_minutes`/`max_minutes`) is stored as the session length. It is
+  still paid in chunks: a top-up buys at most what is left of it and is refused once it is paid
+  for, `low_credits` stays false from then on, and the sweep ends the session as `expired` — and
+  settles the refund — as soon as the paid-for time is used, rather than freezing it.
 - **Credit comes from the settlement, never from the price table.** `MarkMetered` is handed
   `requirements.Amount` — what the facilitator actually confirmed moved. A credit recomputed from
   config could disagree with the money, and the trail's whole claim is that the node owes back what
