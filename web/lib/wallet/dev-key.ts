@@ -36,6 +36,27 @@ const KEY_TYPE = (process.env["NEXT_PUBLIC_DEV_WALLET_KEY_TYPE"] ?? "ecdsa").toL
 export function devKeyConnector(): WalletConnector {
   const configured = ENABLED && ACCOUNT_ID !== "" && PRIVATE_KEY !== "";
 
+  // A named function rather than `this.connect()`: `restore` is handed around
+  // as a bare reference by the provider, and a method that depends on its
+  // receiver would break the moment it is.
+  const signer = async (): Promise<WalletSigner> => {
+    if (!configured) {
+      throw new Error("the dev key connector is not configured");
+    }
+
+    const key =
+      KEY_TYPE === "ed25519"
+        ? PrivateKey.fromStringED25519(PRIVATE_KEY)
+        : PrivateKey.fromStringECDSA(PRIVATE_KEY);
+
+    return {
+      accountId: ACCOUNT_ID,
+      // Sign, never submit — the same contract a real wallet honours. The
+      // facilitator is what puts this on consensus.
+      signTransaction: async (transaction) => transaction.sign(key),
+    };
+  };
+
   return {
     id: "dev-key",
     label: "Use dev key (testnet)",
@@ -45,22 +66,15 @@ export function devKeyConnector(): WalletConnector {
       : undefined,
     usesLocalKey: true,
 
-    async connect(): Promise<WalletSigner> {
-      if (!configured) {
-        throw new Error("the dev key connector is not configured");
-      }
+    connect: signer,
 
-      const key =
-        KEY_TYPE === "ed25519"
-          ? PrivateKey.fromStringED25519(PRIVATE_KEY)
-          : PrivateKey.fromStringECDSA(PRIVATE_KEY);
-
-      return {
-        accountId: ACCOUNT_ID,
-        // Sign, never submit — the same contract a real wallet honours. The
-        // facilitator is what puts this on consensus.
-        signTransaction: async (transaction) => transaction.sign(key),
-      };
+    /*
+     * Nothing is held open, so restoring is just connecting again — and it
+     * prompts nobody, because the "wallet" is a key in the bundle.
+     */
+    async restore(): Promise<WalletSigner | null> {
+      if (!configured) return null;
+      return signer();
     },
 
     async disconnect(): Promise<void> {

@@ -34,6 +34,16 @@ export type WalletConnector = {
   readonly usesLocalKey: boolean;
 
   connect(): Promise<WalletSigner>;
+  /**
+   * Reconnects a session that already exists, without prompting.
+   *
+   * Called on page load for whichever connector was last used. It must never
+   * open a modal or ask the wallet for anything the renter has not already
+   * approved — a page that popped a wallet dialog on every reload would be
+   * worse than the forgetting it fixes. Returns null when there is nothing to
+   * restore, which is the ordinary case for a first visit.
+   */
+  restore(): Promise<WalletSigner | null>;
   disconnect(): Promise<void>;
 };
 

@@ -12,7 +12,8 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet/wallet-provider";
-import { hbar } from "@/lib/registry";
+import { hbar, hbarShort } from "@/lib/registry";
+import { clearSession, loadSession, saveSession } from "@/lib/session-store";
 import { ConnectWallet } from "./connect-wallet";
 import { MinutesPicker } from "./minutes-picker";
 import { SessionPanel, type SessionView } from "./session-panel";
@@ -42,8 +43,18 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
 
   const minSeconds = offer.min_minutes * 60;
   const pricePerSecond = BigInt(offer.price_tinybars_per_second ?? "0");
-  const chunkSeconds = offer.chunk_seconds ?? 300;
-  const chunkCost = pricePerSecond * BigInt(chunkSeconds);
+  /*
+   * The chunk is the node's, not ours.
+   *
+   * There used to be a `?? 300` here, which meant a node that published no
+   * chunk size silently got someone else's five minutes — the page would then
+   * explain a payment split the node had never agreed to. A missing chunk size
+   * is not a number to guess: it means this node has not said, so the page
+   * stops claiming to know.
+   */
+  const chunkSeconds = offer.chunk_seconds !== undefined && offer.chunk_seconds > 0
+    ? offer.chunk_seconds
+    : null;
 
   // The picker chooses the session's length, within the node's own bounds. It
   // is paid for in chunks of at most chunk_seconds — the most of a renter's
@@ -58,29 +69,61 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
   );
   const sessionSeconds = minutes * 60;
   const totalCost = pricePerSecond * BigInt(sessionSeconds);
-  const firstPaymentSeconds = Math.min(sessionSeconds, chunkSeconds);
-  const payments = Math.ceil(sessionSeconds / chunkSeconds);
+  const firstPaymentSeconds = chunkSeconds === null ? sessionSeconds : Math.min(sessionSeconds, chunkSeconds);
+  const payments = chunkSeconds === null ? null : Math.ceil(sessionSeconds / chunkSeconds);
+  const firstPaymentCost = pricePerSecond * BigInt(firstPaymentSeconds);
 
   const [requireGpu, setRequireGpu] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
 
+  // Whether the stored session has been looked for yet. Rendering the buy form
+  // before that answer is in would show "connect your wallet and pay" to
+  // someone who already has a session running on this node — the exact thing
+  // this is here to prevent — so the first paint waits for it.
+  const [hydrated, setHydrated] = useState(false);
+
   // Guards the auto-top-up effect against firing twice for the same low-credit
   // moment while the first payment is still in flight — the poll that notices
   // low_credits runs every few seconds, which is faster than a wallet prompt.
   const toppingUp = useRef(false);
 
+  /*
+   * Pick the session back up after a reload.
+   *
+   * Only the handle is restored: session id, token, and the connection details
+   * that do not change. Every number on the panel is refreshed by the poll
+   * below within a second of mounting, so a stale credit figure from before the
+   * reload is never what the renter acts on.
+   */
+  useEffect(() => {
+    const stored = loadSession(node.node_id);
+    if (stored !== null) setSession(stored);
+    setHydrated(true);
+  }, [node.node_id]);
+
+  // Written on every change rather than at open: a top-up, a freeze and a stop
+  // all move numbers the next page load should not contradict.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (session === null) return;
+    saveSession(node.node_id, session);
+  }, [hydrated, session, node.node_id]);
+
   const payer = useMemo(() => {
     if (wallet.status !== "connected") return null;
     return createWalletPayer(wallet.signer, {
       network: node.network,
-      // Headroom over one chunk: a top-up costs the same as opening, and this
+      // Headroom over one payment: a top-up costs the same as opening, and this
       // cap is the renter's own guard against a node quoting a different price
-      // in the 402 than it advertised in its heartbeat.
-      maxTinybarsPerPayment: chunkCost * 2n,
+      // in the 402 than it advertised in its heartbeat. A node that never
+      // published a chunk size may ask for the whole session at once, so the
+      // cap falls back to what the whole session was quoted at — still bounded
+      // by what the renter chose, never by a number this page made up.
+      maxTinybarsPerPayment: firstPaymentCost * 2n,
     });
-  }, [wallet, node.network, chunkCost]);
+  }, [wallet, node.network, firstPaymentCost]);
 
   const open = useCallback(async () => {
     if (payer === null) return;
@@ -184,7 +227,18 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
    */
   useEffect(() => {
     if (session === null || session.token === undefined) return;
-    if (isSessionTerminal(session.status)) return;
+    /*
+     * A finished session is still worth watching until the refund lands. The
+     * node settles on its own sweep and retries a transfer that failed, so
+     * "owed to you" becomes "refunded" a few seconds after a stop — and a poll
+     * that stopped at the terminal status would leave the renter looking at a
+     * debt that had already been paid, with a reload as the only way to find
+     * out.
+     */
+    // Nothing more to learn from a node that has stopped answering for this id.
+    if (session.ended_remotely === true) return;
+    const awaitingRefund = isSessionTerminal(session.status) && session.settle_state !== "done";
+    if (isSessionTerminal(session.status) && !awaitingRefund) return;
 
     const token = session.token;
     const id = session.session_id;
@@ -195,7 +249,34 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         const response = await fetch(`${node.public_url}/v1/sessions/${id}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!response.ok || cancelled) return;
+        if (cancelled) return;
+        /*
+         * The node no longer answers for this session id.
+         *
+         * This is the ordinary end of every session, not an error: the node
+         * serves session state out of its single active-lease slot and releases
+         * that slot the instant a session is stopped, expires, or is reaped —
+         * so the reply to "how is my session" turns from 200 to 404 between one
+         * poll and the next. Deleting the session here, as this used to, threw
+         * away the renter's own record of what they were owed at the exact
+         * moment it became unrefreshable.
+         *
+         * So it is recorded as an ending instead, and the panel says the
+         * numbers are the last ones the node gave rather than current.
+         */
+        if (response.status === 404 || response.status === 401 || response.status === 403) {
+          setSession((current) => {
+            if (current === null || current.session_id !== id) return current;
+            if (current.ended_remotely === true) return current;
+            return {
+              ...current,
+              status: isSessionTerminal(current.status) ? current.status : "expired",
+              ended_remotely: true,
+            };
+          });
+          return;
+        }
+        if (!response.ok) return;
         const state = (await response.json()) as SessionState;
         setSession((current) =>
           current === null || current.session_id !== id ? current : { ...current, ...state },
@@ -211,7 +292,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
     };
 
     void check();
-    const timer = setInterval(() => void check(), 7_000);
+    const timer = setInterval(() => void check(), awaitingRefund ? 5_000 : 7_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -220,7 +301,26 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
     // (same session id and token throughout) and including it would restart
     // this poll on every render it causes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.session_id, session?.token, session?.status, node.public_url, payer]);
+  }, [
+    session?.session_id,
+    session?.token,
+    session?.status,
+    session?.settle_state,
+    session?.ended_remotely,
+    node.public_url,
+    payer,
+  ]);
+
+  const dismiss = useCallback(() => {
+    clearSession(node.node_id);
+    setSession(null);
+    setError(null);
+  }, [node.node_id]);
+
+  // Nothing at all until the stored session has been looked for — one frame,
+  // and it is the difference between a renter seeing their session and seeing
+  // an invitation to buy a second one.
+  if (!hydrated) return null;
 
   if (session !== null) {
     return (
@@ -231,6 +331,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         error={error}
         onTopUp={topUp}
         onStop={stop}
+        onDismiss={dismiss}
       />
     );
   }
@@ -258,19 +359,40 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         <div className="border-y border-foreground/10 py-5">
           <div className="flex items-baseline justify-between gap-4">
             <span className="type-label text-muted-foreground">{minutes}-minute session</span>
-            <span className="type-stat">{hbar(totalCost.toString())} HBAR</span>
+            <span className="type-stat tabular-nums" title={`${hbar(totalCost.toString())} HBAR`}>
+              {hbarShort(totalCost.toString())} HBAR
+            </span>
           </div>
           <p className="mt-2 font-mono text-xs text-muted-foreground">
-            {hbar(pricePerSecond.toString())} HBAR/s ·{" "}
-            {payments === 1
-              ? "one payment"
-              : `${payments} payments of up to ${hbar(chunkCost.toString())} HBAR`}
+            {hbarShort(pricePerSecond.toString(), 6)} HBAR/s ·{" "}
+            {payments === null
+              ? "paid on demand"
+              : payments === 1
+                ? "one payment"
+                : `${payments} payments of up to ${hbarShort(firstPaymentCost.toString())} HBAR`}
           </p>
+          {/*
+           * Spelled out in the renter's own minutes, because "chunk_seconds"
+           * shown as a bare second count next to a minute count is the thing
+           * that reads as a hardcoded five minutes somebody forgot to change.
+           * It is this node's setting, it is a cap on exposure rather than a
+           * limit on the session, and saying both is what stops it looking
+           * like a bug.
+           */}
           <p className="mt-3 text-xs text-muted-foreground">
-            {payments === 1
-              ? "One payment covers the whole session. "
-              : `The first payment buys ${firstPaymentSeconds}s, and the rest is bought automatically in chunks of up to ${chunkSeconds}s as each runs low — that is the most of your money the node ever holds ahead of the compute. `}
-            The session ends when your {minutes} minutes are used, and{" "}
+            {payments === null ? (
+              <>This node has not published how it splits payments, so it may ask for the whole session at once. </>
+            ) : payments === 1 ? (
+              <>One payment covers the whole session. </>
+            ) : (
+              <>
+                Paid in {payments} parts: {formatMinutes(firstPaymentSeconds)} now, then the rest
+                automatically as each runs low. Your session is still the full {minutes} minutes —{" "}
+                {formatMinutes(chunkSeconds ?? 0)} is this node&apos;s cap on how far ahead of the
+                compute it is ever holding your money.{" "}
+              </>
+            )}
+            The session ends by itself when your {minutes} minutes are used, and{" "}
             <strong className="text-foreground">stopping early refunds what you did not use</strong>.
           </p>
         </div>
@@ -343,4 +465,16 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
       </div>
     </div>
   );
+}
+
+/**
+ * Seconds as the renter said them — minutes where they divide cleanly, because
+ * "300s" beside "7 minutes" makes the reader do arithmetic to find out whether
+ * the two numbers are even about the same thing.
+ */
+function formatMinutes(seconds: number): string {
+  if (seconds <= 0) return "0 minutes";
+  if (seconds % 60 !== 0) return `${seconds} seconds`;
+  const minutes = seconds / 60;
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }

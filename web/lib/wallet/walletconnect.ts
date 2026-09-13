@@ -70,6 +70,41 @@ export function walletConnectConnector(): WalletConnector {
       };
     },
 
+    /*
+     * WalletConnect persists its own session, so `init()` on a fresh page load
+     * rehydrates it and populates `signers` with no user interaction at all.
+     * An empty `signers` after init is the honest "nothing to restore" — the
+     * renter never approved this origin, or they disconnected from the wallet
+     * side, and either way the connect button is the right next step.
+     */
+    async restore(): Promise<WalletSigner | null> {
+      if (PROJECT_ID === "") return null;
+
+      connector = new DAppConnector(
+        {
+          name: "MACH402",
+          description: "Rent a GPU by the second, paid with x402 on Hedera",
+          url: window.location.origin,
+          icons: [`${window.location.origin}/favicon.ico`],
+        },
+        LedgerId.TESTNET,
+        PROJECT_ID,
+        [HederaJsonRpcMethod.SignTransaction],
+        [],
+        [HederaChainId.Testnet],
+      );
+
+      await connector.init();
+
+      const signer = connector.signers[0];
+      if (signer === undefined) return null;
+
+      return {
+        accountId: signer.getAccountId().toString(),
+        signTransaction: (transaction) => signer.signTransaction(transaction),
+      };
+    },
+
     async disconnect(): Promise<void> {
       await connector?.disconnectAll().catch(() => {
         // A session the wallet already dropped is not an error worth showing:

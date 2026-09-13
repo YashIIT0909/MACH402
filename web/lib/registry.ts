@@ -36,6 +36,31 @@ export function hbar(tinybars: string): string {
   return fraction === "" ? whole : `${whole}.${fraction}`;
 }
 
+/**
+ * The same amount, short enough to set at display size.
+ *
+ * A tinybar amount carries eight decimal places and most of them are noise to a
+ * renter watching a balance — 0.01000200 at 66px does not fit half a panel, and
+ * padding it out of the way by shrinking the type makes the one number the page
+ * is about the smallest thing on it.
+ *
+ * Truncated, never rounded, and by slicing the string: these are exact integer
+ * amounts and arithmetic on them in a float is how a balance ends up off by a
+ * tinybar. Truncation also keeps the displayed figure from ever overstating
+ * what is owed. A non-zero amount that would truncate to nothing is shown as a
+ * bound instead, because "0" would be a lie about money.
+ */
+export function hbarShort(tinybars: string, decimals = 4): string {
+  const padded = tinybars.padStart(9, "0");
+  const whole = padded.slice(0, -8).replace(/^0+(?=\d)/, "");
+  const fraction = padded.slice(-8).slice(0, decimals).replace(/0+$/, "");
+
+  if (fraction !== "") return `${whole}.${fraction}`;
+  // Whole part aside, everything shown is zero: say so honestly.
+  if (whole !== "0") return whole;
+  return /[1-9]/.test(tinybars) ? `<0.${"0".repeat(decimals - 1)}1` : "0";
+}
+
 export type NodeResult =
   | { ok: true; node: NodeListing }
   | { ok: false; error: string };
