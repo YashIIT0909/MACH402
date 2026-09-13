@@ -9,6 +9,8 @@ payment settles on Hedera in under a second, and whatever credit they do not use
 
 Built for the *AI & Agentic Payments on Hedera* track. **Testnet only.**
 
+![MACH402 — GPU rental, metered by the second](docs/images/overview-hero.png)
+
 ---
 
 ## What works currently
@@ -51,6 +53,14 @@ Discovery:
   serves the same listings under the names an autonomous renter looks for.
 - **A website** (`web/`): a page that hands a provider their install command, a page that lists
   every node with its GPU and session price, and a rent flow that pays from the renter's own wallet.
+- **An MCP server for agents** (`packages/mcp-server/`, published on npm as
+  [`mach402-mcp-server`](https://www.npmjs.com/package/mach402-mcp-server)): the same rent flow as
+  the website, exposed as tools an AI agent can call directly — search nodes, get a quote, open a
+  session, top it up, stop it — with its own daily spend cap and a confirmation gate for anything
+  above a threshold you set. It is fully standalone: no dependency on any other package in this
+  repo, so it installs and runs with nothing but `npx`. See
+  [`packages/mcp-server/README.md`](packages/mcp-server/README.md) for the full tool reference and
+  host wiring instructions (Claude Code, Claude Desktop, or any MCP client).
 - **An installer** (`scripts/install.sh`): builds the daemon, the lease image and the signing
   sidecar, configures the node, and starts it announcing.
 - A smoke test that proves one real HBAR payment moves, kept green in CI.
@@ -98,6 +108,44 @@ exact scheme exists.
 | `packages/types/` | TypeScript | The frozen cross-component contract, re-exporting the SDK's wire types so drift becomes a compile error |
 | `smoke/` | TypeScript | The known-good reference server and client, kept forever as a CI regression test |
 
+### Provider and renter, side by side
+
+The two sides never share infrastructure — a provider's setup and a renter's session only ever meet
+at the node itself. The registry helps a renter *find* a node; it is never on the path money moves.
+
+```mermaid
+flowchart LR
+    subgraph Provider["Provider (lender)"]
+        Install["scripts/install.sh\ncleargate-node setup"]
+        Node["Provider node\n(x402 resource server)"]
+        GPU[("GPU")]
+        HCS[("HCS audit topic\nowed-refund, every 15s")]
+    end
+
+    subgraph Discovery["Registry — discovery only, never touches money"]
+        Reg[("registry/\nFastify + Postgres")]
+    end
+
+    subgraph Renter["Renter (human or agent)"]
+        Human["Person — website rent flow"]
+        Agent["Agent — mach402-mcp-server"]
+    end
+
+    Fac["Blocky402 facilitator"]
+    Hedera[("Hedera testnet")]
+
+    Install -->|configures & starts| Node
+    Node -->|heartbeat every 30s| Reg
+    Human -->|browse /nodes| Reg
+    Agent -->|search_compute_nodes| Reg
+    Human -->|pay & open session| Node
+    Agent -->|open_session / top_up_session / stop_session| Node
+    Node -->|verify / settle| Fac
+    Fac -->|co-sign & submit| Hedera
+    Node -->|runs the session on| GPU
+    Node -->|publishes what it owes, continuously| HCS
+```
+
 ---
 
 ## The payment flow
@@ -120,6 +168,31 @@ x402 v2. Note the header names — v1's `X-PAYMENT` pair is accepted on input bu
 
 The settlement is written to the node's append-only `receipts.jsonl` the moment it lands, so a
 provider can audit earnings without trusting any website.
+
+At a glance:
+
+![Discovery is free; the 402 challenge says exactly what it wants](docs/images/developers-x402.png)
+
+```mermaid
+sequenceDiagram
+    participant R as Renter / Agent
+    participant N as Provider Node
+    participant F as Facilitator (Blocky402)
+    participant H as Hedera Testnet
+
+    R->>N: POST /v1/sessions (no payment header)
+    N-->>R: 402 + PAYMENT-REQUIRED (price, payTo, feePayer)
+    R->>R: sign a partially-signed TransferTransaction (@x402/hedera)
+    R->>N: POST /v1/sessions (PAYMENT-SIGNATURE)
+    N->>F: POST /verify (against the node's own requirements)
+    F-->>N: isValid: true
+    N->>N: start container -> sign SSH cert -> confirm tunnel reachable
+    N->>F: POST /settle
+    F->>H: co-sign as fee payer, submit transaction
+    H-->>F: transaction receipt
+    F-->>N: settlement (success, transaction id)
+    N-->>R: 200 + PAYMENT-RESPONSE + session token + Jupyter link
+```
 
 ---
 
@@ -166,6 +239,8 @@ the node runs in **CPU-fallback mode** — it says so loudly at startup and repo
 `cleargate-node tui` runs the same server with a live dashboard instead of log lines. `serve` stays
 the right command for a box running under systemd.
 
+![The provider dashboard: earnings, GPU load, listing status, live session state](docs/images/provider-dashboard.png)
+
 ### Get listed on the website
 
 The registry is discovery only: it records where nodes are, never a payment. Start it and the site:
@@ -178,6 +253,8 @@ make dev-web          # the website on :3000
 
 Then open <http://localhost:3000/provide>, fill in the Hedera account you want to be paid into, and
 run the command it gives you on the machine with the GPU:
+
+![Listing a GPU: account, price per minute, public URL, one install command](docs/images/list-your-gpu.png)
 
 ```sh
 PAY_TO=0.0.1234 \
@@ -299,6 +376,24 @@ Two things are worth knowing before you rent:
 
 The certificate you get back is valid only for that lease, only until its paid time runs out. There
 is no key to revoke and nothing to clean up: it lapses with the session.
+
+### Rent via an AI agent (MCP)
+
+Everything above also works with no human clicking through the website. `mach402-mcp-server` is
+published on npm — **https://www.npmjs.com/package/mach402-mcp-server** — and exposes the same
+rent flow as MCP tools:
+
+```sh
+npx -y mach402-mcp-server
+```
+
+Point it at your own Hedera testnet account and a registry, wire it into an MCP-speaking host
+(Claude Code, Claude Desktop, or any agent framework with an MCP client), and the agent's own model
+decides when to search for a node, get a quote, pay for a session, top it up, or stop it — the exact
+same `/v1/sessions` flow described above, just called by an agent instead of typed by a person. It
+is a fully standalone package: no dependency on the rest of this repo, so `npx` is all it needs. Full
+tool reference, environment variables, and host-wiring instructions live in
+[`packages/mcp-server/README.md`](packages/mcp-server/README.md).
 
 ---
 
