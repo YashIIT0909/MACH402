@@ -113,38 +113,7 @@ exact scheme exists.
 The two sides never share infrastructure — a provider's setup and a renter's session only ever meet
 at the node itself. The registry helps a renter *find* a node; it is never on the path money moves.
 
-```mermaid
-flowchart LR
-    subgraph Provider["Provider (lender)"]
-        Install["scripts/install.sh\ncleargate-node setup"]
-        Node["Provider node\n(x402 resource server)"]
-        GPU[("GPU")]
-        HCS[("HCS audit topic\nowed-refund, every 15s")]
-    end
-
-    subgraph Discovery["Registry — discovery only, never touches money"]
-        Reg[("registry/\nFastify + Postgres")]
-    end
-
-    subgraph Renter["Renter (human or agent)"]
-        Human["Person — website rent flow"]
-        Agent["Agent — mach402-mcp-server"]
-    end
-
-    Fac["Blocky402 facilitator"]
-    Hedera[("Hedera testnet")]
-
-    Install -->|configures & starts| Node
-    Node -->|heartbeat every 30s| Reg
-    Human -->|browse /nodes| Reg
-    Agent -->|search_compute_nodes| Reg
-    Human -->|pay & open session| Node
-    Agent -->|open_session / top_up_session / stop_session| Node
-    Node -->|verify / settle| Fac
-    Fac -->|co-sign & submit| Hedera
-    Node -->|runs the session on| GPU
-    Node -->|publishes what it owes, continuously| HCS
-```
+![Provider and renter workflow: how a lender's node, the registry, and a renter (human or agent) connect](docs/images/provider-renter-workflow.png)
 
 ---
 
@@ -173,26 +142,7 @@ At a glance:
 
 ![Discovery is free; the 402 challenge says exactly what it wants](docs/images/developers-x402.png)
 
-```mermaid
-sequenceDiagram
-    participant R as Renter / Agent
-    participant N as Provider Node
-    participant F as Facilitator (Blocky402)
-    participant H as Hedera Testnet
-
-    R->>N: POST /v1/sessions (no payment header)
-    N-->>R: 402 + PAYMENT-REQUIRED (price, payTo, feePayer)
-    R->>R: sign a partially-signed TransferTransaction (@x402/hedera)
-    R->>N: POST /v1/sessions (PAYMENT-SIGNATURE)
-    N->>F: POST /verify (against the node's own requirements)
-    F-->>N: isValid: true
-    N->>N: start container -> sign SSH cert -> confirm tunnel reachable
-    N->>F: POST /settle
-    F->>H: co-sign as fee payer, submit transaction
-    H-->>F: transaction receipt
-    F-->>N: settlement (success, transaction id)
-    N-->>R: 200 + PAYMENT-RESPONSE + session token + Jupyter link
-```
+![Sequence diagram: renter/agent, provider node, facilitator, and Hedera testnet](docs/images/payment-sequence-diagram.png)
 
 ---
 
