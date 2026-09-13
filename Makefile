@@ -32,7 +32,8 @@ LEASE_EXTRA_PIP  ?=
 
 .PHONY: help install smoke supported agent lease-image dev-node dev-tui \
         registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean \
-        contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register
+        contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register \
+        deploy-registry deploy-web
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -69,6 +70,12 @@ dev-registry: ## run the discovery registry on :4400
 
 dev-registry-sample: ## serve fixture nodes on :4400 for website work — no Postgres, no heartbeats
 	node scripts/sample-registry.mjs
+
+deploy-registry: ## production: registry + Postgres + HTTPS, configured by deploy/registry/.env
+	docker compose -f deploy/registry/docker-compose.yml up -d --build
+
+deploy-web: ## production: website + HTTPS, configured by deploy/web/.env
+	docker compose -f deploy/web/docker-compose.yml up -d --build
 
 dev-web: ## run the website on :3000
 	pnpm --filter @cleargate/web run dev

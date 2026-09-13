@@ -393,6 +393,13 @@ stopped or reaped            →  unburned credit refunded
 
 ---
 
+## Deploying
+
+[`deploy/README.md`](deploy/README.md): the registry and Postgres on one server, the website on
+another, each started with a single `docker compose up -d --build` behind automatic HTTPS.
+
+---
+
 ## Development
 
 [`TESTING.md`](TESTING.md) is the step-by-step runbook for verifying a build, from static
