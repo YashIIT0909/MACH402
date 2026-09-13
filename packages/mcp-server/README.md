@@ -1,4 +1,4 @@
-# @cleargate/mcp-server
+# @mach402/mcp-server
 
 An MCP server that lets an AI agent shop for, pay for, and use a ClearGate
 metered GPU session on its own — the agent equivalent of a human running
@@ -27,11 +27,11 @@ See `.env.example` for the full list, including optional spend caps
 ## Running it
 
 ```
-npx -y @cleargate/mcp-server
+npx -y @mach402/mcp-server
 ```
 
 (Once published — see the repo's `feat/mcp-server` branch notes until then.
-From a checkout of this repo, `pnpm --filter @cleargate/mcp-server run start`
+From a checkout of this repo, `pnpm --filter @mach402/mcp-server run start`
 runs the same thing.)
 
 It speaks MCP over stdio, so it's meant to be launched by an MCP host, not run
@@ -44,7 +44,7 @@ built-in MCP client support) just needs one config entry:
 
 - **Claude Code**:
   ```
-  claude mcp add cleargate -- npx -y @cleargate/mcp-server
+  claude mcp add mach402 -- npx -y @mach402/mcp-server
   ```
   with env vars set in your shell or in a `.mcp.json` `env` block.
 - **Claude Desktop** — add to `claude_desktop_config.json`:
@@ -53,7 +53,7 @@ built-in MCP client support) just needs one config entry:
     "mcpServers": {
       "cleargate": {
         "command": "npx",
-        "args": ["-y", "@cleargate/mcp-server"],
+        "args": ["-y", "@mach402/mcp-server"],
         "env": {
           "HEDERA_ACCOUNT_ID": "0.0.xxxxxxx",
           "HEDERA_PRIVATE_KEY": "...",

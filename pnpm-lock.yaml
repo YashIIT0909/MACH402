@@ -11,7 +11,7 @@ importers:
       '@cleargate/hederakit':
         specifier: workspace:*
         version: link:hederakit
-      '@cleargate/mcp-server':
+      '@mach402/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
       '@types/node':

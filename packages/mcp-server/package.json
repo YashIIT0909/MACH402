@@ -1,5 +1,5 @@
 {
-  "name": "@cleargate/mcp-server",
+  "name": "@mach402/mcp-server",
   "version": "0.1.0",
   "private": true,
   "description": "MCP server that lets an AI agent shop for and pay for ClearGate metered GPU sessions on its own",
@@ -12,7 +12,7 @@
     "src",
     "README.md"
   ],
-  "//": "Deliberately standalone: no @cleargate/* workspace dependency. Everything it needs from client/ and packages/types is copied into src/vendor/, so this package can be published and run with no monorepo context at all.",
+  "//": "Deliberately standalone: no @mach402/* workspace dependency. Everything it needs from client/ and packages/types is copied into src/vendor/, so this package can be published and run with no monorepo context at all.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "start": "tsx src/server.ts"

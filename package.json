@@ -16,8 +16,7 @@
     "@types/node": "22.20.2",
     "@cleargate/client": "workspace:*",
     "@cleargate/hederakit": "workspace:*",
-    "@cleargate/mcp-server": "workspace:*"
-    "@cleargate/hederakit": "workspace:*"
+    "@mach402/mcp-server": "workspace:*"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

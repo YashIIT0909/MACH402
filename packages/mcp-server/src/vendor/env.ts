@@ -4,7 +4,7 @@
  * The key is read from the environment, never from a config file, never written
  * to disk and never logged — see CLAUDE.md, "Secrets". This is a vendored copy
  * of client/src/env.ts: this package is deliberately standalone (no
- * @cleargate/* workspace dependency), so its own copy lives here rather than
+ * @mach402/* workspace dependency), so its own copy lives here rather than
  * being imported across packages.
  */
 import { config as loadDotenv } from "dotenv";
