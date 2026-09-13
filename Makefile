@@ -30,6 +30,9 @@ LEASE_BASE_IMAGE ?= $(shell docker info --format '{{if index .Runtimes "nvidia"}
 #   make lease-image LEASE_BASE_IMAGE=tensorflow/tensorflow:2.17.0-gpu
 LEASE_EXTRA_PIP  ?=
 
+.PHONY: help install smoke smoke-agent supported agent lease-image dev-node dev-tui cli dev-client \
+        registry-db dev-registry dev-registry-sample dev-web mcp-server typecheck vet test clean \
+        contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register
 .PHONY: help install smoke supported agent lease-image dev-node dev-tui \
         registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean \
         contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register \
@@ -79,6 +82,9 @@ deploy-web: ## production: website + HTTPS, configured by deploy/web/.env
 
 dev-web: ## run the website on :3000
 	pnpm --filter @cleargate/web run dev
+
+mcp-server: ## run the agent-facing MCP server over stdio (standalone package — see packages/mcp-server)
+	pnpm --filter @cleargate/mcp-server run start
 
 contracts: ## compile the Solidity contracts
 	pnpm --filter @cleargate/contracts run build
