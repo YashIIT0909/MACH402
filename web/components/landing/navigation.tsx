@@ -41,7 +41,7 @@ import { Eyebrow } from "@/components/landing/primitives";
 /** The landing page's sections, in document order — a real sequence, so numbered. */
 const SECTIONS = [
   { id: "top", name: "Overview" },
-  { id: "features", name: "Features" },
+  { id: "mcp", name: "MCP" },
   { id: "how-it-works", name: "How it works" },
   { id: "developers", name: "Developers" },
 ] as const;
