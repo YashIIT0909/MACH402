@@ -18,7 +18,7 @@ export type AuditEntry = {
 };
 
 export function auditLogPath(): string {
-  return process.env["CLEARGATE_MCP_AUDIT_LOG"] ?? join(homedir(), ".cleargate", "mcp-audit.jsonl");
+  return process.env["mach402_MCP_AUDIT_LOG"] ?? join(homedir(), ".mach402", "mcp-audit.jsonl");
 }
 
 /** Never throws: losing the audit trail must not block a call the caller already approved. */

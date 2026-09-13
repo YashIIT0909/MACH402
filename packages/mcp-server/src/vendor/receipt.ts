@@ -1,8 +1,8 @@
 /**
  * This package's own append-only spend mirror, vendored from
- * client/src/receipt.ts and pointed at its own file (`CLEARGATE_MCP_RECEIPTS`)
+ * client/src/receipt.ts and pointed at its own file (`mach402_MCP_RECEIPTS`)
  * so an agent's spend never gets invisibly mixed into a human renter's
- * `~/.cleargate/receipts.jsonl`. This is also the daily-cap check's source of
+ * `~/.mach402/receipts.jsonl`. This is also the daily-cap check's source of
  * truth — see safety/limits.ts.
  */
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
@@ -21,7 +21,7 @@ export type SpendRecord = {
 };
 
 export function receiptsPath(): string {
-  return process.env["CLEARGATE_MCP_RECEIPTS"] ?? join(homedir(), ".cleargate", "mcp-receipts.jsonl");
+  return process.env["mach402_MCP_RECEIPTS"] ?? join(homedir(), ".mach402", "mcp-receipts.jsonl");
 }
 
 /** Appends one spend record. Never throws: losing the mirror must not fail a payment. */

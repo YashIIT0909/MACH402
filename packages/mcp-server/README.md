@@ -1,8 +1,8 @@
 # @mach402/mcp-server
 
-An MCP server that lets an AI agent shop for, pay for, and use a ClearGate
+An MCP server that lets an AI agent shop for, pay for, and use a mach402
 metered GPU session on its own — the agent equivalent of a human running
-`cleargate session` from the CLI. It only ever opens **metered sessions**
+`mach402 session` from the CLI. It only ever opens **metered sessions**
 (pay → meter → refund unburned credit); it never runs a flat-fee job or a
 `direct`-mode lease, and it never touches the escrow contract.
 
@@ -14,15 +14,15 @@ repo, no `pnpm install` in a monorepo.
 ## Setup
 
 The only secret this server ever holds is **your own** Hedera key — it never
-leaves your machine, and ClearGate never sees it. Get a funded testnet account
+leaves your machine, and mach402 never sees it. Get a funded testnet account
 at https://portal.hedera.com, then set:
 
 - `HEDERA_ACCOUNT_ID`, `HEDERA_PRIVATE_KEY`, `HEDERA_KEY_TYPE`
-- `CLEARGATE_REGISTRY_URL` — the ClearGate registry to search for nodes
+- `mach402_REGISTRY_URL` — the mach402 registry to search for nodes
 
 See `.env.example` for the full list, including optional spend caps
-(`CLEARGATE_MAX_TINYBARS_PER_PAYMENT`, `CLEARGATE_MAX_TINYBARS_PER_DAY`,
-`CLEARGATE_CONFIRM_ABOVE_TINYBARS`).
+(`mach402_MAX_TINYBARS_PER_PAYMENT`, `mach402_MAX_TINYBARS_PER_DAY`,
+`mach402_CONFIRM_ABOVE_TINYBARS`).
 
 ## Running it
 
@@ -51,13 +51,13 @@ built-in MCP client support) just needs one config entry:
   ```json
   {
     "mcpServers": {
-      "cleargate": {
+      "mach402": {
         "command": "npx",
         "args": ["-y", "@mach402/mcp-server"],
         "env": {
           "HEDERA_ACCOUNT_ID": "0.0.xxxxxxx",
           "HEDERA_PRIVATE_KEY": "...",
-          "CLEARGATE_REGISTRY_URL": "https://your-registry.example"
+          "mach402_REGISTRY_URL": "https://your-registry.example"
         }
       }
     }
@@ -65,7 +65,7 @@ built-in MCP client support) just needs one config entry:
   ```
 
 Once connected, the host's normal tool discovery picks up every tool below
-and the agent's own model decides when to call them — no ClearGate-specific
+and the agent's own model decides when to call them — no mach402-specific
 glue code needed.
 
 **An agent framework that doesn't speak MCP yet** needs a generic MCP client
@@ -88,11 +88,11 @@ schemas into whatever tool-calling loop that framework already has.
 ## Safety
 
 Every paying call goes through: a daily-cap check, then a confirmation gate
-for anything above `CLEARGATE_CONFIRM_ABOVE_TINYBARS`, then the per-call cap
+for anything above `mach402_CONFIRM_ABOVE_TINYBARS`, then the per-call cap
 enforced inside the payment itself. Every call — paying or not — is appended
-to an audit log (`CLEARGATE_MCP_AUDIT_LOG`), and every payment is mirrored to
-a local spend ledger (`CLEARGATE_MCP_RECEIPTS`) separate from anything the
-`cleargate` CLI writes.
+to an audit log (`mach402_MCP_AUDIT_LOG`), and every payment is mirrored to
+a local spend ledger (`mach402_MCP_RECEIPTS`) separate from anything the
+`mach402` CLI writes.
 
 Be honest about the trust shape you're accepting: like the CLI's `session`
 command, this is forward payment into a node-held credit with a

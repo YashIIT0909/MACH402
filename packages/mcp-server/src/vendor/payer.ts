@@ -2,7 +2,7 @@
  * The x402 paying-fetch machinery, vendored from client/src/pay.ts +
  * client/src/payment.ts.
  *
- * All Hedera signing in ClearGate lives in TypeScript, backed by `@x402/hedera`
+ * All Hedera signing in mach402 lives in TypeScript, backed by `@x402/hedera`
  * (CLAUDE.md invariant 2). This package is standalone, so it carries its own
  * copy rather than importing `client/`'s — see the note in package.json.
  */
@@ -47,7 +47,7 @@ export type HederaSigner = {
  *
  * By default `x402Client` only permits assets its `findDefaultAsset`
  * recognizes — on Hedera that is testnet USDC, capped at $1 — and native HBAR
- * is not one of them, so a stock client refuses a ClearGate challenge with no
+ * is not one of them, so a stock client refuses a mach402 challenge with no
  * clear error. This registers an explicit policy instead: HBAR only, on the
  * expected network, below the caller's own cap.
  */

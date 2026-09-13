@@ -1,5 +1,5 @@
 /**
- * Read-only client for the ClearGate discovery registry.
+ * Read-only client for the mach402 discovery registry.
  *
  * The registry never touches money (CLAUDE.md invariant 3), so this is the
  * only free, no-key call in this package's shopping flow.

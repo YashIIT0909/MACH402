@@ -2,10 +2,10 @@
   "name": "@mach402/mcp-server",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP server that lets an AI agent shop for and pay for ClearGate metered GPU sessions on its own",
+  "description": "MCP server that lets an AI agent shop for and pay for mach402 metered GPU sessions on its own",
   "type": "module",
   "bin": {
-    "cleargate-mcp": "./bin/cleargate-mcp.mjs"
+    "mach402-mcp": "./bin/mach402-mcp.mjs"
   },
   "files": [
     "bin",

@@ -1,5 +1,5 @@
 /**
- * Trimmed, vendored copies of the ClearGate wire types this package touches —
+ * Trimmed, vendored copies of the mach402 wire types this package touches —
  * session lifecycle and node discovery only, since this package never opens a
  * flat-fee job or a `direct`-mode lease. Originals live in `packages/types`;
  * this package doesn't depend on that package (or any other workspace

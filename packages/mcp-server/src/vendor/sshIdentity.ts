@@ -24,12 +24,12 @@ export type SshIdentity = {
 
 /** Generates a throwaway SSH keypair. Written to a private temp dir, not ~/.ssh. */
 export function createSshIdentity(): SshIdentity {
-  const dir = mkdtempSync(join(tmpdir(), "cleargate-mcp-session-"));
+  const dir = mkdtempSync(join(tmpdir(), "mach402-mcp-session-"));
   const keyPath = join(dir, "id_ed25519");
 
   execFileSync(
     "ssh-keygen",
-    ["-q", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "cleargate-mcp-session"],
+    ["-q", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "mach402-mcp-session"],
     { stdio: "pipe" },
   );
 

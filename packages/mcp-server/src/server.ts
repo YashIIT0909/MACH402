@@ -1,7 +1,7 @@
 /**
- * `cleargate-mcp` — an MCP server exposing ClearGate's metered GPU sessions as
+ * `mach402-mcp` — an MCP server exposing mach402's metered GPU sessions as
  * tools, so an AI agent can shop for, pay for, and use compute without a
- * human running the `cleargate` CLI by hand.
+ * human running the `mach402` CLI by hand.
  *
  * Sessions only (CLAUDE.md: no flat-fee job tools here), no escrow contract
  * (uses the live session-metering + HCS-published refund trail), and no
@@ -20,7 +20,7 @@ import { registerConfirmPayment } from "./tools/confirmPayment.js";
 
 const config = loadConfig();
 
-const server = new McpServer({ name: "cleargate-mcp", version: "0.1.0" });
+const server = new McpServer({ name: "mach402-mcp", version: "0.1.0" });
 
 registerSearchComputeNodes(server, config);
 registerGetNodeQuote(server);

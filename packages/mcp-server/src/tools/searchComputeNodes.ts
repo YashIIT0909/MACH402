@@ -9,7 +9,7 @@ export function registerSearchComputeNodes(server: McpServer, config: McpConfig)
     {
       title: "Search compute nodes",
       description:
-        "List online ClearGate provider nodes that sell metered GPU sessions, optionally filtered " +
+        "List online mach402 provider nodes that sell metered GPU sessions, optionally filtered " +
         "by GPU requirement and max price per second. Free — no payment, no key needed.",
       inputSchema: {
         require_gpu: z

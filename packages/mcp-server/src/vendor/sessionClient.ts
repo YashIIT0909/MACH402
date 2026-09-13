@@ -1,5 +1,5 @@
 /**
- * Typed client for a ClearGate provider node's session endpoints.
+ * Typed client for a mach402 provider node's session endpoints.
  *
  * Session-only subset, vendored and trimmed from client/src/node.ts — this
  * package never opens a flat-fee job or a `direct`-mode lease. `quoteSession`
