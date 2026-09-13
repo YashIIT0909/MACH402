@@ -26,7 +26,11 @@
 
 /** What a renter asks for when opening a session. */
 export interface SessionSpec {
-    /** How long to buy up front, in seconds. Bounded by the node's offer. */
+    /**
+     * The session's length, in seconds, within the node's `min_minutes` and
+     * `max_minutes`. It is paid for in chunks of at most `chunk_seconds`, and
+     * the session ends once this much time has been used.
+     */
     seconds: number;
     /** The renter's SSH public key. The private half never leaves their machine. */
     public_key: string;
@@ -63,6 +67,10 @@ export interface SessionCreated {
     low_credits: boolean;
     /** Seconds the credit currently buys. */
     seconds: number;
+    /** The session length chosen, in seconds. Absent on nodes older than this field. */
+    session_seconds?: number;
+    /** True once every chunk of the chosen length has been bought; no more top-ups follow. */
+    fully_paid?: boolean;
 }
 
 /** A session runs through the same states a lease does. */
@@ -87,6 +95,10 @@ export interface SessionState {
     expires_at: string;
     seconds_remaining: number;
     paid_seconds: number;
+    /** The session length chosen, in seconds. Absent on nodes older than this field. */
+    session_seconds?: number;
+    /** True once every chunk of the chosen length has been bought; no more top-ups follow. */
+    fully_paid?: boolean;
     gpu: boolean;
 
     price_tinybars_per_second: string;

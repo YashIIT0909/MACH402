@@ -72,7 +72,15 @@ export function SessionPanel({
                 ? "Your credit ran out and the container was paused — nothing in it is lost. A top-up thaws it exactly as you left it. It is destroyed if left frozen too long."
                 : `≈${remaining} left at the current rate. Unlike a lease this is a refund owed to you, not time you have already spent — stop any time and get it back.`}
             </p>
-            {session.low_credits === true && !frozen ? (
+            {session.session_seconds !== undefined && session.session_seconds > 0 ? (
+              <p className="mt-2 font-mono text-xs text-muted-foreground">
+                {Math.round(session.session_seconds / 60)}-minute session ·{" "}
+                {session.fully_paid === true
+                  ? "fully paid, ends when this credit is used"
+                  : "topping up until it is paid for"}
+              </p>
+            ) : null}
+            {session.low_credits === true && session.fully_paid !== true && !frozen ? (
               <p className="mt-2 text-xs text-accent">
                 Running low — the next top-up should fire automatically. If your wallet is prompting,
                 that is why.
@@ -118,9 +126,11 @@ export function SessionPanel({
           <div>
             <div className="type-label mb-3 text-muted-foreground">Manage</div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" disabled={busy !== null} onClick={() => void onTopUp()}>
-                Top up now
-              </Button>
+              {session.fully_paid === true ? null : (
+                <Button variant="outline" disabled={busy !== null} onClick={() => void onTopUp()}>
+                  Top up now
+                </Button>
+              )}
               <Button variant="quiet" disabled={busy !== null} onClick={() => void onStop()}>
                 Stop &amp; get refund
               </Button>
