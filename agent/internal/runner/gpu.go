@@ -20,7 +20,7 @@ type GPU struct {
 	Reason string
 }
 
-// DetectGPU decides whether this node runs jobs on a GPU or falls back to CPU.
+// DetectGPU decides whether lease containers get a GPU or fall back to CPU.
 //
 // Both halves are checked because they fail independently: a laptop can have an
 // RTX card with no container toolkit installed, and a server can have the

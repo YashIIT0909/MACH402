@@ -12,80 +12,41 @@ import { Input } from "@/components/ui/input";
 const INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/YashIIT0909/ClearGate/main/scripts/install.sh";
 
-type Target = "remote" | "local";
-type TunnelMode = "quick" | "off";
-
 /**
- * Builds the provider's setup command.
+ * Builds the provider's install command.
  *
  * Nothing is submitted anywhere: the registry learns about a node when that
  * node first heartbeats, not when someone fills in this form. So there is no
  * account to create, and no way to list a machine you do not control.
  *
- * Two targets, because they are genuinely different situations rather than a
- * preference. A provider putting a spare box to work wants the one-liner, which
- * clones and builds for them. Someone testing both sides on one laptop already
- * has the checkout, and running the installer there would clone a second copy
- * into ~/.cleargate and configure that one instead — which is a confusing way
- * to discover your edits are not running.
+ * One command, run on the machine with the card: the one-liner clones and
+ * builds for the provider. There is nothing to choose but a price: every node
+ * sells metered sessions, with the GPU on and refunds paid automatically.
+ * `GPU=1`, `LEASES=1`, `SESSIONS=1` and `SELF_SETTLE=1` stay in the command
+ * although this repo's installer no longer reads them — the command fetches the
+ * installer from GitHub, and a copy published before that change still needs
+ * them spelled out.
  */
 export function InstallCommand({ registryUrl }: { registryUrl: string }) {
-  const [target, setTarget] = useState<Target>("remote");
   const [payTo, setPayTo] = useState("");
-  const [price, setPrice] = useState("100000");
   const [publicUrl, setPublicUrl] = useState("http://localhost:8402");
-  const [gpu, setGpu] = useState(false);
-  // Deliberately its own checkbox, and off by default. Renting out batch
-  // compute and handing someone a shell are different decisions, and this one
-  // must never ride along with the GPU box being ticked.
-  const [leases, setLeases] = useState(false);
   const [leasePrice, setLeasePrice] = useState("200000");
-  const [tunnelMode, setTunnelMode] = useState<TunnelMode>("quick");
   const [copied, setCopied] = useState(false);
 
   const account = payTo === "" ? "0.0.YOUR_ACCOUNT" : payTo;
-  const jobPrice = price === "" ? "100000" : price;
   const minutePrice = leasePrice === "" ? "200000" : leasePrice;
 
-  const command =
-    target === "remote"
-      ? [
-          `PAY_TO=${account}`,
-          `PRICE_TINYBARS=${jobPrice}`,
-          `PUBLIC_URL=${publicUrl}`,
-          `REGISTRY_URL=${registryUrl}`,
-          ...(gpu ? ["GPU=1"] : []),
-          ...(leases
-            ? [
-                "LEASES=1",
-                `LEASE_PRICE_TINYBARS_PER_MINUTE=${minutePrice}`,
-                `TUNNEL_MODE=${tunnelMode}`,
-              ]
-            : []),
-          `bash -c "$(curl -fsSL ${INSTALL_SCRIPT_URL})"`,
-        ].join(" \\\n  ")
-      : [
-          "make agent",
-          ...(leases ? ["make lease-image"] : []),
-          "",
-          [
-            "./bin/cleargate-node setup",
-            `  --pay-to ${account}`,
-            `  --price-tinybars ${jobPrice}`,
-            `  --public-url ${publicUrl}`,
-            `  --registry-url ${registryUrl}`,
-            ...(gpu ? ["  --gpu"] : []),
-            ...(leases
-              ? [
-                  "  --enable-leases",
-                  `  --lease-price-tinybars-per-minute ${minutePrice}`,
-                  `  --tunnel-mode ${tunnelMode}`,
-                ]
-              : []),
-          ].join(" \\\n"),
-          "",
-          "make dev-tui",
-        ].join("\n");
+  const command = [
+    `PAY_TO=${account}`,
+    `PUBLIC_URL=${publicUrl}`,
+    `REGISTRY_URL=${registryUrl}`,
+    `LEASE_PRICE_TINYBARS_PER_MINUTE=${minutePrice}`,
+    "GPU=1",
+    "LEASES=1",
+    "SESSIONS=1",
+    "SELF_SETTLE=1",
+    `bash -c "$(curl -fsSL ${INSTALL_SCRIPT_URL})"`,
+  ].join(" \\\n  ");
 
   async function copy() {
     await navigator.clipboard.writeText(command);
@@ -107,10 +68,10 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
         </Field>
 
         <Field
-          label="Price per job, in tinybars"
-          hint="100000 = 0.001 HBAR. A whole number, always — amounts are never floats."
+          label="Price per minute of a session, in tinybars"
+          hint="200000 = 0.002 HBAR a minute, charged by the second. A whole number, always — amounts are never floats."
         >
-          <Input value={price} onChange={(event) => setPrice(event.target.value)} />
+          <Input value={leasePrice} onChange={(event) => setLeasePrice(event.target.value)} />
         </Field>
 
         <Field
@@ -120,105 +81,63 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
           <Input value={publicUrl} onChange={(event) => setPublicUrl(event.target.value)} />
         </Field>
 
-        <label className="group flex cursor-pointer items-start gap-3 border border-foreground/10 p-4 transition-colors hover:border-foreground/25">
-          <input
-            type="checkbox"
-            checked={gpu}
-            onChange={(event) => setGpu(event.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
-          />
-          <span className="text-sm text-muted-foreground">
-            This machine has an NVIDIA GPU with the container toolkit installed. The node re-checks
-            this itself and falls back to CPU if the card cannot be passed through.
+        <div className="border border-foreground/10 p-4">
+          <span className="block text-sm text-muted-foreground">
+            Needs an NVIDIA GPU with the NVIDIA Container Toolkit installed. The GPU is always turned
+            on; the node re-checks the card itself and falls back to CPU if it cannot be passed through.
           </span>
-        </label>
+        </div>
 
-        <label className="group mt-4 flex cursor-pointer items-start gap-3 border border-foreground/10 p-4 transition-colors hover:border-foreground/25">
-          <input
-            type="checkbox"
-            checked={leases}
-            onChange={(event) => setLeases(event.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
-          />
-          <span className="text-sm text-muted-foreground">
-            Also rent out interactive sessions — a shell and a Jupyter server, by the minute.
-            Separate from the box above on purpose.
+        <div className="mt-4 border border-accent/30 bg-accent/[0.04] p-4">
+          <span className="mb-3 block type-label text-muted-foreground">What renters get</span>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Renters get a root shell in a container on this machine, through Jupyter in their
+            browser. Their code and data never leave their own machine, and nothing of yours is
+            exposed: every Linux capability is dropped but the few <Code>sshd</Code> needs, it
+            cannot gain privileges, it gets a throwaway filesystem, and it reaches the network
+            only through a proxy that allows package and model registries and refuses the rest.
+            Access is by certificate, signed on your machine, valid only while credit is paid for.
+          </p>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Root inside a container is still not nothing. The installer points you at
+            Docker&apos;s user-namespace remapping, which maps that root to an unprivileged user
+            on your host — turn it on before renting to strangers.
+          </p>
+          <p className="mb-5 text-sm text-muted-foreground">
+            Renters pay in chunks of credit that burn by the second, and whatever they do not use
+            is refunded automatically — from a Hedera operator key the installer creates on this
+            machine, separate from the account above. Setup waits while you send it a few testnet
+            HBAR, enough to cover a refund. Your earnings still land in your own account, which
+            never signs anything.
+          </p>
+
+          <span className="mb-2 block type-label text-muted-foreground">
+            How renters reach the session
           </span>
-        </label>
-
-        {leases ? (
-          <div className="mt-4 border border-accent/30 bg-accent/[0.04] p-4">
-            <p className="mb-4 text-sm text-muted-foreground">
-              Renters get a root shell in a container on this machine and connect over SSH or from
-              a browser. Their code and data never leave their own machine, and nothing of yours is
-              exposed: every Linux capability is dropped but the few <Code>sshd</Code> needs, it
-              cannot gain privileges, it gets a throwaway filesystem, and it reaches the network
-              only through a proxy that allows package and model registries and refuses the rest.
-              Access is by certificate, signed on your machine, valid only for the minutes paid for.
-            </p>
-            <p className="mb-5 text-sm text-muted-foreground">
-              Root inside a container is still not nothing. The installer points you at
-              Docker&apos;s user-namespace remapping, which maps that root to an unprivileged user
-              on your host — turn it on before renting to strangers.
-            </p>
-
-            <Field
-              label="Price per minute of interactive time, in tinybars"
-              hint="200000 = 0.002 HBAR a minute. A whole number, as ever."
-            >
-              <Input value={leasePrice} onChange={(event) => setLeasePrice(event.target.value)} />
-            </Field>
-
-            <span className="mb-2 block type-label text-muted-foreground">
-              How renters reach the session
-            </span>
-            <div className="mb-2 grid gap-2 sm:grid-cols-2">
-              <ModeButton
-                active={tunnelMode === "quick"}
-                onClick={() => setTunnelMode("quick")}
-                title="Cloudflare quick tunnel"
-                body="No Cloudflare account. A fresh random hostname per session, so the link dies with it. Jupyter only — a quick tunnel carries no SSH."
-              />
-              <ModeButton
-                active={tunnelMode === "off"}
-                onClick={() => setTunnelMode("off")}
-                title="No tunnel"
-                body="The session is only reachable from this machine's own network. Right for testing both sides on one box; useless to a renter anywhere else."
-              />
-            </div>
-            {tunnelMode === "quick" ? (
-              <p className="text-sm text-muted-foreground">
-                Needs <Code>cloudflared</Code> installed. Without it the node cannot publish a
-                session and will refuse to sell one rather than take payment for something
-                unreachable.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+          <p className="mb-2 text-sm text-muted-foreground">
+            Through a Cloudflare quick tunnel — no Cloudflare account, and a fresh random hostname
+            per session, so the link dies with it. Jupyter only: a quick tunnel carries no SSH.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Needs <Code>cloudflared</Code>, <Code>pnpm</Code> and <Code>ssh-keygen</Code>; the
+            installer fetches <Code>cloudflared</Code> itself. Without a working tunnel the node
+            refuses to sell a session rather than take payment for something unreachable.
+          </p>
+        </div>
       </div>
 
       <div className="bg-background p-8 lg:p-12">
-        <span className="mb-6 block type-label text-muted-foreground">Where are you running it</span>
-
-        <div className="mb-8 grid gap-2 sm:grid-cols-2">
-          <ModeButton
-            active={target === "remote"}
-            onClick={() => setTarget("remote")}
-            title="On another machine"
-            body="One command. It clones ClearGate, builds the node, checks Docker and the GPU, and starts it."
-          />
-          <ModeButton
-            active={target === "local"}
-            onClick={() => setTarget("local")}
-            title="From this checkout"
-            body="You already have the repo. Uses it directly instead of cloning a second copy into ~/.cleargate."
-          />
-        </div>
+        <span className="mb-3 block type-label text-muted-foreground">
+          Run this on the machine with the GPU
+        </span>
+        <p className="mb-8 text-sm text-muted-foreground">
+          One command. It clones ClearGate, builds the node, checks Docker and the GPU, and starts it.
+        </p>
 
         <div className="border border-foreground/10">
           <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-5 py-3">
             <span className="type-label text-muted-foreground">
-              {target === "remote" ? "install command" : "run from the repo root"}
+              install command
             </span>
             <Button
               variant="accent"
@@ -275,33 +194,6 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  title,
-  body,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  body: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`cursor-pointer border p-4 text-left transition-colors ${
-        active
-          ? "border-accent bg-accent/[0.06]"
-          : "border-foreground/10 hover:border-foreground/25"
-      }`}
-    >
-      <span className="mb-1 block text-sm font-medium">{title}</span>
-      <span className="block text-xs text-muted-foreground">{body}</span>
-    </button>
   );
 }
 

@@ -3,8 +3,8 @@ import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
 import type { HardhatUserConfig } from "hardhat/config";
 
-// Credentials live in the repo-root .env, the same file the renter CLI and the
-// smoke test read. There is no contracts-specific .env to keep in sync.
+// Credentials live in the repo-root .env, the same file the smoke test reads.
+// There is no contracts-specific .env to keep in sync.
 loadEnv({ path: resolve(__dirname, "../.env") });
 
 /**

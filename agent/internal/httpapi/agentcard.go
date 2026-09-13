@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
 )
 
@@ -65,8 +64,6 @@ type cardCapabilities struct {
 	Docker  bool `json:"docker"`
 	SSH     bool `json:"ssh"`
 	Jupyter bool `json:"jupyter"`
-	// Streaming is job log streaming over SSE, which the job API has always had.
-	Streaming bool `json:"streaming"`
 }
 
 type cardSkill struct {
@@ -81,9 +78,8 @@ type cardPayments struct {
 	Network string `json:"network"`
 	Asset   string `json:"asset"`
 	PayTo   string `json:"payTo"`
-	// Refundable is true only on a node selling metered sessions, where the
-	// unburned remainder of a paid chunk comes back. False means this node's
-	// interactive time is forward-paid and keeping it is the renter's problem.
+	// Refundable is true on every node selling sessions: the unburned remainder
+	// of a paid chunk comes back when the session ends.
 	Refundable bool `json:"refundable,omitempty"`
 	// AuditTopic lets a paying agent check a provider's settlement history
 	// before trusting them with money, not only afterwards.
@@ -119,11 +115,10 @@ func (s *Server) agentCardFrom(spec nodespec.Spec) agentCard {
 		Capabilities: cardCapabilities{
 			// Derived, never stored: a second copy of "what can this node do"
 			// would only be a second thing to keep in step with the first.
-			CUDA:      spec.GPU.Available,
-			Docker:    true,
-			SSH:       spec.Leases != nil && spec.Leases.SSH,
-			Jupyter:   spec.Leases != nil && spec.Leases.Jupyter,
-			Streaming: true,
+			CUDA:    spec.GPU.Available,
+			Docker:  true,
+			SSH:     spec.Leases != nil && spec.Leases.SSH,
+			Jupyter: spec.Leases != nil && spec.Leases.Jupyter,
 		},
 		Skills: nodeSkills(spec),
 		Payments: cardPayments{
@@ -135,7 +130,9 @@ func (s *Server) agentCardFrom(spec nodespec.Spec) agentCard {
 		},
 	}
 
-	if s.cfg.Leases.Enabled && s.cfg.Leases.PaymentMode == config.PaymentSession {
+	// Interactive time is only ever sold as a metered session, which refunds
+	// what a renter does not use.
+	if s.cfg.Leases.Enabled {
 		card.Payments.Refundable = true
 	}
 
@@ -151,33 +148,25 @@ func (s *Server) agentCardFrom(spec nodespec.Spec) agentCard {
 	return card
 }
 
-// nodeSkills lists what this node actually sells, so an agent choosing between
-// providers can tell a batch-job node from one selling interactive shells
-// without inferring it from a price field.
+// nodeSkills lists what this node actually sells, so an agent can match on a
+// skill rather than inferring it from a price field.
 func nodeSkills(spec nodespec.Spec) []cardSkill {
-	skills := []cardSkill{{
-		ID:          "gpu-job",
-		Name:        "Sandboxed GPU job",
-		Description: "Run a container from this node's image allowlist on its GPU, paid per job over x402.",
-		Tags:        []string{"gpu", "batch", "docker", "x402"},
-	}}
-
-	if spec.Leases != nil {
-		skills = append(skills, cardSkill{
-			ID:          "gpu-session",
-			Name:        "Interactive GPU session",
-			Description: "An SSH shell and a Jupyter server on this node's GPU, billed by the second.",
-			Tags:        []string{"gpu", "interactive", "ssh", "jupyter"},
-		})
+	if spec.Leases == nil {
+		return []cardSkill{}
 	}
-	return skills
+	return []cardSkill{{
+		ID:          "gpu-session",
+		Name:        "Metered GPU session",
+		Description: "A Jupyter server in a container on this node's GPU, billed by the second, with unused credit refunded.",
+		Tags:        []string{"gpu", "interactive", "jupyter", "metered", "x402"},
+	}}
 }
 
 func describeNode(spec nodespec.Spec) string {
 	if spec.GPU.Available && spec.GPU.Model != nil {
-		return "GPU compute on " + *spec.GPU.Model + ", rented per job or per second and settled on Hedera."
+		return "GPU sessions on " + *spec.GPU.Model + ", billed by the second and settled on Hedera."
 	}
-	return "CPU compute, rented per job or per second and settled on Hedera."
+	return "CPU sessions, billed by the second and settled on Hedera."
 }
 
 // caip2For maps ClearGate's network string to the CAIP-2 chain id an agent

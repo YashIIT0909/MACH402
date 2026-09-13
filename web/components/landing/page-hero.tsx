@@ -1,5 +1,6 @@
 import { AnimatedSphere } from "./ascii-canvas";
 import { CONTAINER } from "./layout";
+import { Eyebrow } from "./primitives";
 
 /**
  * The opening band on the pages that are not the landing page.
@@ -41,10 +42,12 @@ export function PageHero({
       </div>
 
       <div className={`relative z-10 pt-40 pb-20 lg:pt-48 lg:pb-28 ${CONTAINER}`}>
-        <span className="mb-6 inline-flex items-center gap-3 font-mono text-sm text-muted-foreground">
-          <span className="h-px w-8 bg-foreground/30" />
-          {eyebrow}
-        </span>
+        {/*
+         * The shared Eyebrow, not a hand-rolled copy of it: this band opens
+         * /nodes and /provide, and a small mono label here beside the Ticketing
+         * labels that open every landing section read as a different site.
+         */}
+        <Eyebrow className="mb-6">{eyebrow}</Eyebrow>
 
         <h1 className="type-display">
           {title}

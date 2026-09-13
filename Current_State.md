@@ -4,7 +4,7 @@ A snapshot of what is built, what is wired together, and what is still open. For
 setup, see `README.md`; for the invariants that must never be violated, see `CLAUDE.md`. This file
 is the "where are we" view — read it before planning the next piece of work.
 
-Last updated: 2026-09-12, against `main` at `5bc7398` plus the metered-sessions change.
+Last updated: 2026-09-12, against `main` at `5bc7398` plus the sessions-only change.
 
 ---
 
@@ -13,10 +13,10 @@ Last updated: 2026-09-12, against `main` at `5bc7398` plus the metered-sessions 
 | Milestone | Scope | Status |
 |---|---|---|
 | **M0** | Payment spike — prove one x402 payment settles on Hedera testnet | ✅ Done. `make smoke` is green and kept as a CI regression test. |
-| **M1** | One provider node, one paid flat-fee job | ✅ Done. Sandboxed Docker runner, dataset staging, GPU passthrough with CPU fallback, provider TUI, renter CLI. |
+| **M1** | One provider node, one paid flat-fee job | ✅ Done, then removed. Batch jobs, dataset staging and the job sandbox are gone; GPU passthrough with CPU fallback and the provider TUI remain. |
 | **M2 (discovery half)** | Registry + website, opt-in listing | ✅ Done. Heartbeat-based discovery, trust-on-first-use listing ownership, provider signup page, node browsing page. |
-| **M2 (rent-from-website half)** | Paying and starting a job/lease from the browser | ✅ Done. Browser wallet signing and a rent flow on the site. |
-| **M3** | Metered interactive leases (SSH + Jupyter, pay by the minute, forward payment) | ✅ Done. Certificate-based access, cloudflared tunneling (named + quick), freeze-then-reap on missed payment. |
+| **M2 (rent-from-website half)** | Paying for a session from the browser | ✅ Done. Browser wallet signing and a rent flow on the site. |
+| **M3** | Interactive leases (a Jupyter server in a container) | ✅ Done. Certificate-based access, cloudflared quick tunnels, freeze-then-reap. Sold only as M4's metered sessions now — the prepaid, non-refundable mode was removed. |
 | **M4** | Refundable sessions, HCS audit trail, ERC-8004 identity | ✅ Done, then reworked. Sessions are now **metered x402 chunks with a published refund-owed trail**, not contract escrow; `SessionEscrow` is parked. `IdentityRegistry`, HCS publishing and `register` are unchanged. |
 
 Nothing is mainnet. Everything above is testnet-only by design (see CLAUDE.md's "Deliberately out
@@ -35,61 +35,48 @@ Routes actually registered (`agent/internal/httpapi/server.go`):
 ```
 GET  /health
 GET  /v1/specs
-POST /v1/jobs                      x402-gated, flat fee
-GET  /v1/jobs/{id}                 token-gated
-GET  /v1/jobs/{id}/logs            token-gated, SSE
-GET  /v1/jobs/{id}/artifact        token-gated
-POST /v1/jobs/{id}/stop            token-gated
-POST /v1/leases                    x402-gated, priced by the minute (direct mode)
-POST /v1/leases/{id}/extend        x402-gated
-GET  /v1/leases/{id}               token-gated
-POST /v1/leases/{id}/stop          token-gated
-POST /v1/sessions                  x402-gated, priced per chunk (metered mode)
+POST /v1/sessions                  x402-gated, priced per chunk
 POST /v1/sessions/{id}/topup       x402-gated + session-token-gated
 GET  /v1/sessions/{id}             token-gated
 POST /v1/sessions/{id}/stop        token-gated
 GET  /.well-known/agent-card.json  free, unauthenticated
 ```
 
-Leases and sessions both answer `404` on a node that never opted in (`LEASES=1` /
-`leases.payment_mode: session`), so an unconfigured node is indistinguishable from a pre-leasing
-build. There is no session *quote* endpoint: the price of a given payment is the ordinary x402
+Sessions answer `404` on a node whose leasing is off or whose sidecar did not start. The batch job
+routes (`/v1/jobs`) and the prepaid `/v1/leases` routes were removed. There is no session *quote* endpoint: the price of a given payment is the ordinary x402
 challenge on the 402, and the shopping-ahead terms are in `leases` on the free `/v1/specs`.
 
 Internal packages, and what each owns:
 
 - `internal/x402` — challenge building, facilitator client (`/supported`, `/verify`, `/settle`), v1/v2 header compatibility.
-- `internal/runner` — Docker-over-HTTP job execution, the sandbox (`--network=none`, caps, timeouts), lease containers (internal Docker network + `cleargate-egress` proxy), the freeze/reap sweep.
+- `internal/runner` — Docker-over-HTTP lease containers (internal Docker network + `cleargate-egress` proxy), freeze and reap.
 - `internal/nodespec` — single source of truth for `/v1/specs` and the heartbeat body, so they cannot drift.
 - `internal/sshca` — the node's own SSH CA; signs one certificate per lease, `principal = lease_id`.
-- `internal/tunnel` — supervises `cloudflared`, named (SSH+Jupyter) and quick (Jupyter-only) modes.
+- `internal/tunnel` — supervises `cloudflared` quick tunnels (Jupyter only, no SSH).
 - `internal/mirror` — read-only Hedera mirror-node client. No key. Resolves accounts and EVM addresses, retries through ingestion lag. Used by setup and by the parked escrow path.
-- `internal/escrow` — **parked** with `contracts/SessionEscrow.sol`. Only `PricePerSecond` is still live, and both modes share it.
-- `internal/hedera` — runs `cleargate-hedera` (from `hederakit/`) as a child process for the operations that need a signature: HCS submission, ERC-8004 registration, and — under `self_settle` — the HBAR transfer that refunds a session. Links no Hedera SDK.
+- `internal/escrow` — **parked** with `contracts/SessionEscrow.sol`. Only `PricePerSecond` is still live; the session path uses it.
+- `internal/hedera` — runs `cleargate-hedera` (from `hederakit/`) as a child process for the operations that need a signature: HCS submission, ERC-8004 registration, and the HBAR transfer that refunds a session. Links no Hedera SDK.
 - `internal/hcs` — builds and publishes settlement receipts *and the running session burn checkpoints* to the provider's own audit topic.
-- `internal/fetch` — the hardened dataset downloader (SSRF-resistant: blocks loopback/link-local/private/CGNAT, rechecks every redirect hop).
 - `internal/registry` — the heartbeat client that pushes this node's listing every 30s.
 
-### `client/` (TypeScript) — the renter CLI, `cleargate`
+### `client/` (TypeScript) — payment signing for the website
 
-- `pay.ts` — the only place a `TransferTransaction` is built and signed (`@x402/hedera`), with spend controls explicitly reconfigured to allow HBAR (the SDK's stock defaults only recognize testnet USDC). Jobs, leases and sessions all go through it.
-- `escrow.ts` — **parked** alongside the contract. Nothing on the default path imports it.
-- `lease.ts`, `node.ts` — lease/session lifecycle helpers: budget enforcement client-side, SSE log streaming, cert handling.
-- `cli.ts` — the `cleargate` command surface: `run`, `rent`/`stop-lease`, `session`/`stop-session`, `quote`, `spend`.
+- `payment.ts` — the payer: `@x402/hedera` exact-scheme signing wrapped around `fetch`, with spend controls explicitly reconfigured to allow HBAR (the SDK's stock defaults only recognize testnet USDC) and a per-payment cap. Isomorphic, and the only copy of that policy.
+- `browser/` — the entry the website imports (`@cleargate/client/browser`): a wallet-backed signer and in-browser SSH key generation for leases.
+- `escrow.ts` — **parked** alongside the contract, with `env.ts` for its key. Nothing on the default path imports it.
 
 ### `registry/` (TypeScript, Fastify + Postgres)
 
 - Heartbeat ingestion (`/v1/nodes/heartbeat`), trust-on-first-use `registry_token` ownership, online/offline logic (last-beat-under-90s AND not explicitly withdrawn).
 - `providers.ts` — records each node's ERC-8004 `agentId` alongside its listing.
-- `/v1/nodes/:id/tunnel-token` — provisions a scoped Cloudflare tunnel token on a provider's behalf when `CLOUDFLARE_*` env vars are set; answers 503 otherwise and nodes fall back to quick tunnels.
 - Never touches money in any code path — enforced by construction, since nothing here talks to Docker, the facilitator, or a Hedera key.
 
 ### `web/` (Next.js)
 
 - `/` — landing page.
 - `/provide` — hands a provider their install command.
-- `/nodes` — lists every node from the registry: GPU, price, limits, payout account, lease/session capabilities.
-- No payment flow. Renting still happens exclusively through the CLI.
+- `/nodes` — lists every node from the registry: GPU, session price, container, payout account.
+- `/rent/[id]` — rent a session, paid from the renter's own wallet.
 
 ### `contracts/` (Solidity, Hardhat) — deployed to Hedera testnet
 
@@ -107,27 +94,31 @@ touches the key file itself.
 
 ### `packages/types/` (TypeScript)
 
-Shared wire types for jobs, leases, sessions, and x402 payment shapes — imported by both the agent's
+Shared wire types for node specs, lease offers, sessions, and x402 payment shapes — imported by both the agent's
 TS-facing tooling and the client/registry, so the 402 challenge shape, lease spec, and session spec
 cannot drift between components silently.
 
 ---
 
-## The two interactive payment paths, side by side
+## How interactive time is paid for
 
-| | Direct leases (`payment_mode: direct`) | Metered sessions (`payment_mode: session`) |
-|---|---|---|
-| Who signs | Renter signs a `TransferTransaction` | Same |
-| Who submits | The Blocky402 facilitator (co-signs as fee payer) | Same |
-| Verified by | Facilitator's `/verify` | Same |
-| What a payment buys | Minutes of wall clock | A credit in tinybars |
-| Settled by | Facilitator's `/settle`, immediately after the container is proven reachable | Same |
-| Money sits | Provider's `pay_to`, immediately | Provider's `pay_to`, immediately — partly owed back |
-| Refundable | No — forward payment, unrefundable | Yes — the unburned credit, transferred back at stop or reap |
-| Max exposure | One slice (up to `max_minutes`) | One chunk (`session_chunk_seconds`, default 300s) |
-| What backs the refund | n/a | The provider's own transfer, against a figure they publish to HCS every 15s |
+Only as a metered session (`payment_mode: session`). A prepaid mode that bought minutes of wall clock
+with no refund (`payment_mode: direct`, `/v1/leases`) was removed; a config still naming it is
+refused at load.
 
-The honest framing of the second column: this is **forward payment with a provider-issued refund**,
+| | Metered sessions |
+|---|---|
+| Who signs | Renter signs a `TransferTransaction` |
+| Who submits | The Blocky402 facilitator (co-signs as fee payer) |
+| Verified by | Facilitator's `/verify` |
+| What a payment buys | A credit in tinybars, burned by the second |
+| Settled by | Facilitator's `/settle`, immediately after the container is proven reachable |
+| Money sits | Provider's `pay_to`, immediately — partly owed back |
+| Refundable | Yes — the unburned credit, transferred back automatically at stop or reap |
+| Max exposure | One chunk (`session_chunk_seconds`, default 300s) |
+| What backs the refund | The provider's own transfer, against a figure they publish to HCS every 15s |
+
+The honest framing: this is **forward payment with a provider-issued refund**,
 not escrow. Between a chunk settling and the refund going out, the node holds money that is partly
 the renter's. What makes that checkable is `KindSessionBurn` — the node publishes `refund_tinybars`,
 what it owes if the session stopped right now, on every 15-second sweep, to a consensus-ordered
@@ -146,20 +137,20 @@ The stronger guarantee — where the provider never holds the renter's money at 
   out of `pay_to`.
 - **The operator key** (`hedera.operator_key_path`) — a separate, node-local account generated at
   setup, read only by the `cleargate-hedera` sidecar. Pays gas for HCS submissions and ERC-8004
-  registration, and — only under `self_settle` — **pays session refunds out of its own balance**.
+  registration, and on any node selling sessions **pays refunds out of its own balance**.
   That last one is a real change to what this key is for: it is no longer a gas-only float, and a
-  session node with `self_settle` on has to keep enough there to cover an outstanding chunk. A
+  session node has to keep enough there to cover an outstanding chunk. A
   compromise still costs only that balance, never the earnings in `pay_to`.
 
 ---
 
 ## Known gaps / explicitly deferred
 
-- **A session refund depends on the provider.** With `leases.self_settle` off, the node publishes
-  what it owes and logs it, and a human pays it. With it on, the node pays automatically but the
-  transfer can still fail — the sweep retries, and the debt stays `pending` until it succeeds. This
+- **A session refund depends on the provider.** The node pays it automatically, but the transfer
+  can still fail — an unfunded operator account, a sidecar that will not start — and the sweep
+  retries while the debt stays `pending` until it succeeds. This
   is the cost of dropping the contract, and the published burn trail is the mitigation, not a fix.
-- **No end-to-end session smoke test.** `make smoke` and `make smoke-agent` cover the job path; a
+- **No end-to-end session smoke test.** `make smoke` covers the payment path against a reference server; a
   real open → tick → top-up → stop cycle against testnet needs a lease-capable node (built lease
   image, cloudflared, funded operator key, HCS topic) and has not been automated. The meter, the
   burn trail and the accounting identity are covered by Go unit tests in
@@ -167,8 +158,7 @@ The stronger guarantee — where the provider never holds the renter's money at 
 - **No registry keeper.** Nothing external closes a session; the node's own 15-second sweep meters,
   freezes, reaps and refunds. The registry still holds no key and runs no background work.
 - **Single active lease/session per node.** No multi-tenant GPU partitioning in V1.
-- **Arbitrary user images are out of scope.** Jobs run only allowlisted images; leases run only the
-  one image the node itself built (`leases.image`).
+- **Arbitrary user images are out of scope.** Leases run only the one image the node itself built (`leases.image`).
 - **Windows providers, mainnet, reputation/slashing, fiat on-ramp** — all explicitly out of scope per
   `CLAUDE.md`.
 

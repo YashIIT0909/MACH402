@@ -25,7 +25,6 @@ import (
 
 // Message kinds.
 const (
-	KindJob         = "job"
 	KindLease       = "lease"
 	KindSessionOpen = "session_open"
 

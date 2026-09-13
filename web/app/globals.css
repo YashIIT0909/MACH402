@@ -6,11 +6,23 @@
  * that settled, the step you are looking at. Everything else is greyscale, so
  * the green never becomes decoration.
  *
- * Three typefaces, each with a job: a serif for display headings, a sans for
- * prose, and a monospace for anything a machine produced — node ids, Hedera
- * accounts, tinybar amounts, image tags, URLs. That last rule is the important
- * one: this is a payments product, and the values a renter checks before
- * spending money should look like values, not like copy.
+ * Two families, each with a job.
+ *
+ * Ticketing (K-Type) is the voice: every heading, the wordmark, the navigation,
+ * the label that opens each section. It is the pixel lettering of an electronic
+ * ticket printer, which is the right object for a product whose whole claim is
+ * that a machine takes payment and hands over a receipt.
+ *
+ * Atkinson Hyperlegible (Braille Institute) carries everything that is read
+ * rather than recognised — prose in its Next cut, and in its Mono cut anything
+ * a machine produced that sits too small for a pixel face to stay sharp: node
+ * ids, Hedera accounts, tinybar amounts, code. The pairing is not arbitrary:
+ * Ticketing was drawn "for clarity when cheaply printed at small sizes" and
+ * Atkinson was drawn for readers with low vision. Both are faces whose one
+ * brief is legibility under a constraint.
+ *
+ * The mono rule still stands: this is a payments product, and the values a
+ * renter checks before spending money should look like values, not like copy.
  *
  * Tailwind v4 with the shadcn token layout, shared with the design system in
  * `optimus-the-ai-platform-to-build-and-ship/`, so components port across
@@ -68,7 +80,7 @@
   --radius: 0.25rem;
 
   /*
-   * The three faces, as real custom properties.
+   * The faces, as real custom properties.
    *
    * `@theme inline` below does NOT emit its tokens as runtime variables — it
    * substitutes them into Tailwind's own utilities at build time. So a
@@ -77,8 +89,26 @@
    * and every mono label on this site ended up rendering in Instrument Sans.
    * Anything outside a Tailwind utility must use these.
    */
-  --face-sans: var(--font-plex), "IBM Plex Sans", system-ui, sans-serif;
-  --face-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+  --face-display: var(--font-ticketing), "Ticketing", var(--font-atkinson-mono), ui-monospace, monospace;
+  --face-sans: var(--font-atkinson), "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --face-mono: var(--font-atkinson-mono), "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+
+  /*
+   * One Ticketing pixel, as a font size.
+   *
+   * The face is drawn on a grid of 30 units in a 1000-unit em, so one of its
+   * pixels is 0.03em. It renders sharp only when that lands on a whole screen
+   * pixel — a font size of 33⅓px, or a whole multiple of it. Everywhere else
+   * the square edges are antialiased into grey and the letters go soft, which
+   * on a pixel face reads as a rendering fault rather than a style. So every
+   * Ticketing size on the site is `--tk` times a whole number (or, on phones,
+   * where the screen is at least 2x, a half).
+   *
+   * Leading follows the same grid. With an 800-unit ascent, the baseline lands
+   * on a whole pixel only at line-heights 0.96, 1.08, 1.2, 1.32 — steps of four
+   * font pixels — so those are the only ones used.
+   */
+  --tk: 2.0833333rem;
 
   /*
    * Motion. Three durations and one curve, so a hover, a state change and a
@@ -97,11 +127,14 @@
    * faint on a near-black ground, and most of the site's data and labels live
    * down here — so the whole small end moves rather than each call site.
    */
-  --text-xs: 0.8125rem;
-  --text-sm: 0.9375rem;
+  --text-xs: 0.9375rem;
+  --text-sm: 1.0625rem;
+  --text-base: 1.125rem;
+  --text-lg: 1.25rem;
 
   --font-sans: var(--face-sans);
   --font-mono: var(--face-mono);
+  --font-display: var(--face-display);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -141,7 +174,7 @@
   body {
     background: var(--background);
     color: var(--foreground);
-    font-size: 1.0625rem;
+    font-size: 1.1875rem;
     line-height: 1.6;
   }
 
@@ -165,97 +198,153 @@
 /* --------------------------------------------------------------- type */
 
 /*
- * Five steps, and every piece of text on the site picks one.
+ * Every piece of text on the site picks one of these.
  *
- * Before this a section heading could be any of text-2xl, 3xl, 4xl, 5xl or
- * 6xl depending on which section you were in, and the two page heroes used
- * clamps that differed by half a rem for no reason. Each step carries its own
- * family, leading and tracking, so a heading cannot be half-applied.
+ * Ticketing steps are whole multiples of `--tk` and change at breakpoints
+ * rather than scaling fluidly: a `clamp()` would pass through every fractional
+ * size on the way, and a pixel face is only sharp on the whole ones. Each step
+ * carries its own family, leading and tracking, so a heading cannot be
+ * half-applied. Ticketing has one weight; `font-synthesis: none` stops a
+ * browser smearing a fake bold across its pixels.
  */
 @layer utilities {
-  .type-display {
-    font-family: var(--face-sans);
-    font-size: clamp(2.5rem, 6.4vw, 5rem);
-    line-height: 0.92;
-    letter-spacing: -0.02em;
-  }
-
-  .type-title {
-    font-family: var(--face-sans);
-    font-size: clamp(2rem, 4vw, 3.25rem);
-    line-height: 1.05;
-    letter-spacing: -0.015em;
-  }
-
-  .type-subtitle {
-    font-family: var(--face-sans);
-    font-size: clamp(1.5rem, 1.9vw, 2rem);
-    line-height: 1.15;
-    letter-spacing: -0.01em;
-  }
-
-  .type-heading {
-    font-size: 1.1875rem;
-    line-height: 1.4;
-    font-weight: 500;
-    letter-spacing: -0.005em;
-  }
-
-  .type-lede {
-    font-size: clamp(1.125rem, 1.5vw, 1.375rem);
-    line-height: 1.6;
-  }
-
-  .type-body {
-    font-size: 1.0625rem;
-    line-height: 1.6;
+  .type-display,
+  .type-title,
+  .type-subtitle,
+  .type-heading,
+  .type-eyebrow,
+  .type-nav,
+  .type-stat,
+  .type-wordmark,
+  .type-metric {
+    font-family: var(--face-display);
+    font-weight: 400;
+    font-synthesis: none;
+    letter-spacing: 0;
   }
 
   /*
-   * Navigation. Related to the label step but heavier and a shade larger —
-   * a label describes something nearby, a nav item is a target you have to be
-   * able to read and hit, and at label weight it was too faint to do either.
+   * Headings wrap evenly and, as a last resort, mid-word. A monospaced pixel
+   * face at these sizes fits ~12 characters to a phone line, and the one
+   * heading not written here — a GPU model name off the registry — can be
+   * longer than that.
    */
-  .type-nav {
-    font-family: var(--face-mono);
-    font-size: 0.875rem;
-    font-weight: 500;
-    line-height: 1;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .type-display,
+  .type-title,
+  .type-subtitle,
+  .type-heading {
+    text-wrap: balance;
+    overflow-wrap: anywhere;
   }
 
-  /* Anything a machine produced, and every small caps label. */
-  .type-label {
-    font-family: var(--face-mono);
-    font-size: 0.8125rem;
+  /*
+   * The hero, and only the hero. 66⅔px, then 100px from lg — where the hero's
+   * copy column is wide enough to hold "Rent the machine." on one line (17
+   * characters at 45px each). 133⅓px was tried and wrapped every clause.
+   */
+  .type-display {
+    font-size: calc(var(--tk) * 2);
+    line-height: 0.96;
+  }
+
+  /*
+   * Section titles. One full step under the display, so the hero still reads
+   * as the cover and not as the first of six equal headings: 50px on phones,
+   * 66⅔px from sm.
+   */
+  .type-title {
+    font-size: calc(var(--tk) * 1.5);
+    line-height: 1.08;
+  }
+
+  /* 33⅓px: a step title or card title, sharp at the face's native pixel. */
+  .type-subtitle {
+    font-size: var(--tk);
     line-height: 1.2;
-    letter-spacing: 0.14em;
+  }
+
+  .type-heading {
+    font-size: var(--tk);
+    line-height: 1.2;
+  }
+
+  /* The label that opens a section. Tracked by exactly one font pixel. */
+  .type-eyebrow {
+    font-size: var(--tk);
+    line-height: 1.2;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
   }
 
-  /* Figures read at a glance: prices, stat values, marquee facts. */
-  .type-stat {
-    font-family: var(--face-mono);
-    font-size: clamp(1.875rem, 2.6vw, 2.75rem);
-    line-height: 1.05;
-    letter-spacing: -0.015em;
+  /* Navigation: a target to read and hit, at the face's native pixel. */
+  .type-nav {
+    font-size: var(--tk);
+    line-height: 1.2;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
 
-  /* The brand mark, which is a fixed size and not part of the scale. */
+  /* Figures read at a glance: prices, stat values. 33⅓px, then 66⅔px from lg. */
+  .type-stat {
+    font-size: var(--tk);
+    line-height: 1.08;
+  }
+
   .type-wordmark {
-    font-family: var(--face-sans);
-    font-size: 1.5rem;
-    line-height: 1;
-    letter-spacing: -0.02em;
+    font-size: var(--tk);
+    line-height: 1.08;
   }
 
   /* The live counters, and nothing else. */
   .type-metric {
+    font-size: calc(var(--tk) * 2);
+    line-height: 0.96;
+  }
+
+  @media (min-width: 40rem) {
+    .type-title {
+      font-size: calc(var(--tk) * 2);
+    }
+    .type-metric {
+      font-size: calc(var(--tk) * 3);
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .type-display {
+      font-size: calc(var(--tk) * 3);
+    }
+    .type-stat {
+      font-size: calc(var(--tk) * 2);
+    }
+  }
+
+  /* ---- Atkinson: what is read rather than recognised ---- */
+
+  .type-lede {
+    font-family: var(--face-sans);
+    font-size: clamp(1.25rem, 1.7vw, 1.5rem);
+    line-height: 1.55;
+  }
+
+  .type-body {
+    font-family: var(--face-sans);
+    font-size: 1.1875rem;
+    line-height: 1.6;
+  }
+
+  /*
+   * Small machine text and the labels inside dense UI — forms, rent panels,
+   * table headers — where 33⅓px would not fit and anything smaller would blur
+   * a pixel face. Atkinson's Mono cut, so it still reads as data.
+   */
+  .type-label {
     font-family: var(--face-mono);
-    font-size: clamp(3rem, 6vw, 5.5rem);
-    line-height: 1;
-    letter-spacing: -0.02em;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    line-height: 1.3;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .ease-brand {
@@ -366,5 +455,38 @@
 
   html {
     scroll-behavior: auto;
+  }
+}
+
+/*
+ * The navigation column's own scrollbar.
+ *
+ * Styled rather than hidden: the panel is a list that can be longer than the
+ * viewport, and a track a reader can grab is the thing that tells them so. It
+ * is a hairline on the same grid as every other rule on the site, and it takes
+ * the accent only while being dragged or hovered.
+ */
+@layer utilities {
+  .nav-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+
+  .nav-scroll::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .nav-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .nav-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    transition: background var(--dur-base) var(--ease-out);
+  }
+
+  .nav-scroll:hover::-webkit-scrollbar-thumb,
+  .nav-scroll::-webkit-scrollbar-thumb:active {
+    background: var(--accent);
   }
 }

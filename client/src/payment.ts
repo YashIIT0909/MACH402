@@ -1,9 +1,8 @@
 /**
  * The parts of the payment path that do not care where the signature came from.
  *
- * Split out of `pay.ts` when the website started paying nodes directly: a
- * browser cannot import `pay.ts`, because that reaches `env.ts` for the
- * renter's key and `env.ts` imports `dotenv` and `node:fs` at module scope.
+ * Kept apart from node-side key loading: `env.ts` imports `dotenv` and
+ * `node:fs` at module scope, and the website bundles this file.
  *
  * Everything here is isomorphic, and it is deliberately the *shared* copy
  * rather than a browser-side duplicate. The spend-control policy below is the
@@ -17,7 +16,7 @@ import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import type { PaymentRequirements, SettleResponse } from "@cleargate/types";
 import { HEADER_PAYMENT_RESPONSE, HEDERA_TESTNET, HBAR_ASSET_ID } from "@cleargate/types";
 
-/** 0.1 HBAR. Generous for a per-job flat fee, small enough to catch a typo'd price. */
+/** 0.1 HBAR. Generous for a session chunk, small enough to catch a typo'd price. */
 export const DEFAULT_MAX_TINYBARS_PER_PAYMENT = 10_000_000n;
 
 export type Payer = {

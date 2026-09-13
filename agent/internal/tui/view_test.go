@@ -67,8 +67,8 @@ func TestSessionShowsWhatIsOwedBack(t *testing.T) {
 	}
 }
 
-// Killing a job forfeits a renter's payment and ending a lease takes a
-// stranger's shell away mid-command. Neither may happen on one keystroke.
+// Ending a lease takes a stranger's shell away mid-command. It may not happen
+// on one keystroke.
 func TestDestructiveKeysAskFirst(t *testing.T) {
 	model := testModel(t)
 	model.tab = tabLeases
@@ -119,19 +119,15 @@ func testModel(t *testing.T) *Model {
 	cfg := config.Config{
 		NodeID:            "node_7f3a2b41",
 		PayTo:             "0.0.1234567",
-		PriceTinybars:     "100000",
 		Asset:             "0.0.0",
 		Network:           "hedera:testnet",
 		FacilitatorURL:    "https://api.testnet.blocky402.com",
 		MaxTimeoutSeconds: 300,
 		ListenAddr:        "0.0.0.0:8080",
 		PublicURL:         "https://node.example",
-		ImageAllowlist:    []string{"python:3.11-slim", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"},
 		ReceiptsPath:      "receipts.jsonl",
 		DockerHost:        "unix:///var/run/docker.sock",
 		CORS:              config.CORS{AllowedOrigins: []string{"*"}},
-		Limits:            config.Limits{MaxSeconds: 600, MemoryMB: 4096, CPUCores: 2, MaxArtifactMB: 512},
-		Dataset:           config.Dataset{MaxMB: 2048, TimeoutSeconds: 600},
 		HCS:               config.HCS{Enabled: true, TopicID: "0.0.7654321"},
 		Hedera:            config.Hedera{Enabled: true, OperatorAccountID: "0.0.9999", MirrorURL: "https://testnet.mirrornode.hedera.com"},
 		Leases: config.Leases{
@@ -141,12 +137,10 @@ func testModel(t *testing.T) *Model {
 			MinMinutes:                5,
 			MaxMinutes:                60,
 			MaxTotalMinutes:           240,
-			OverrunSeconds:            30,
 			GraceMinutes:              5,
 			PaymentMode:               config.PaymentSession,
 			SessionChunkSeconds:       300,
 			LowCreditThresholdSeconds: 60,
-			SelfSettle:                true,
 			Egress:                    config.Egress{Allowlist: []string{"pypi.org", "huggingface.co"}},
 		},
 	}
@@ -164,7 +158,7 @@ func testModel(t *testing.T) *Model {
 		Server:  server,
 		Version: "v0.4.1",
 		Receipts: []receipts.Receipt{{
-			JobID:          "job00001",
+			JobID:          "lease00001",
 			Payer:          "0.0.555111",
 			AmountTinybars: "100000",
 			SettledAt:      time.Now().Add(-3 * time.Hour).Format(time.RFC3339Nano),

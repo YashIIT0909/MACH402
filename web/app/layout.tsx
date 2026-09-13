@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
+import { Atkinson_Hyperlegible_Mono, Atkinson_Hyperlegible_Next } from "next/font/google";
+import localFont from "next/font/local";
 
 import { Navigation } from "@/components/landing/navigation";
 import { FooterSection } from "@/components/landing/footer-section";
@@ -7,35 +8,45 @@ import { FooterSection } from "@/components/landing/footer-section";
 import "./globals.css";
 
 /*
- * Two typefaces, with one job each.
+ * Two families, with one job each. The reasoning lives beside the type scale in
+ * globals.css; what matters here is how each one is loaded.
  *
- * IBM Plex Sans carries everything a person reads as prose — headings, ledes,
- * paragraphs. JetBrains Mono carries everything a machine produced or that
- * labels something: node ids, Hedera accounts, tinybar amounts, image tags,
- * navigation, section labels. That split is the site's oldest rule and the
- * reason it is legible at a glance which values are data.
- *
- * Plex is the deliberate pair for Plex Mono's sibling; it sits beside JetBrains
- * Mono without either looking borrowed, and it holds up at the small sizes the
- * tables need.
+ * Ticketing is self-hosted: it is not on Google Fonts. It is K-Type's, and its
+ * free release is for personal use — K-Type's licence says free fonts used
+ * "as webfonts, need to be licensed", so a public deployment of this site needs
+ * one bought from k-type.com. Converted to WOFF2 (118KB to 25KB), otherwise
+ * untouched.
  */
-const sans = IBM_Plex_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-plex",
+const ticketing = localFont({
+  src: "./fonts/Ticketing.woff2",
+  weight: "400",
+  style: "normal",
+  variable: "--font-ticketing",
   display: "swap",
 });
 
-const mono = JetBrains_Mono({
+/*
+ * `adjustFontFallback: false` on both Atkinson cuts: Next ships no metric
+ * overrides for them, and without this it logs a failure on every compile and
+ * builds no adjusted fallback anyway. Saying so here makes that a decision.
+ */
+const atkinson = Atkinson_Hyperlegible_Next({
   subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-jetbrains",
+  variable: "--font-atkinson",
   display: "swap",
+  adjustFontFallback: false,
+});
+
+const atkinsonMono = Atkinson_Hyperlegible_Mono({
+  subsets: ["latin"],
+  variable: "--font-atkinson-mono",
+  display: "swap",
+  adjustFontFallback: false,
 });
 
 export const metadata: Metadata = {
   title: "ClearGate — rent the machine, pay the machine",
-  description: "Rent GPU time by the job, settled with x402 payments on Hedera testnet.",
+  description: "Rent GPU time by the second, settled with x402 payments on Hedera testnet.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -47,7 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
      * every one of those stacks computed to nothing and inherited the body
      * face instead.
      */
-    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+    <html lang="en" className={`${ticketing.variable} ${atkinson.variable} ${atkinsonMono.variable}`}>
       <body className="font-sans antialiased">
         {/*
           * `overflow-x: clip`, not `hidden`. Both stop sideways scrolling, but

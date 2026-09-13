@@ -13,16 +13,13 @@ import (
 
 // Spec mirrors NodeSpec in packages/types. Changing it is a cross-team break.
 type Spec struct {
-	NodeID         string   `json:"node_id"`
-	AgentVersion   string   `json:"agent_version"`
-	PayTo          string   `json:"pay_to"`
-	PriceTinybars  string   `json:"price_tinybars"`
-	FacilitatorURL string   `json:"facilitator_url"`
-	Network        string   `json:"network"`
-	Asset          string   `json:"asset"`
-	ImageAllowlist []string `json:"image_allowlist"`
-	GPU            GPU      `json:"gpu"`
-	Limits         Limits   `json:"limits"`
+	NodeID         string `json:"node_id"`
+	AgentVersion   string `json:"agent_version"`
+	PayTo          string `json:"pay_to"`
+	FacilitatorURL string `json:"facilitator_url"`
+	Network        string `json:"network"`
+	Asset          string `json:"asset"`
+	GPU            GPU    `json:"gpu"`
 
 	// FeePayer lets a client pre-build a payment without first taking a 402.
 	// Omitted when the facilitator could not be reached.
@@ -52,13 +49,13 @@ type Spec struct {
 	AuditTopic string `json:"audit_topic,omitempty"`
 }
 
-// LeaseOffer is what a renter is buying when they rent a shell rather than
-// submit a job: a container on this machine's GPU, for a number of minutes.
+// LeaseOffer is what a renter is buying: a container on this machine's GPU,
+// metered by the second.
 //
-// SSH and Jupyter are separate booleans because they genuinely differ by tunnel
-// mode — a node running a quick tunnel can serve a notebook but has no TCP
-// route for a terminal — and a renter needs to know that before they pay, not
-// after.
+// SSH and Jupyter are separate booleans so a renter learns what a lease offers
+// before they pay. Every lease is published through a quick tunnel, which
+// carries no TCP, so SSH is always false; the field stays so older clients keep
+// parsing it.
 type LeaseOffer struct {
 	PriceTinybarsPerMinute string `json:"price_tinybars_per_minute"`
 	MinMinutes             int    `json:"min_minutes"`
@@ -79,10 +76,11 @@ type LeaseOffer struct {
 	// that cannot reach the index they need is not the lease they wanted.
 	EgressAllowlist []string `json:"egress_allowlist"`
 
-	// PaymentMode is how this node's interactive time is paid for: "direct" is
-	// forward payment per slice and is not refundable, "session" is a metered
-	// credit whose unburned remainder comes back. A client picks which flow to
-	// use from this field rather than by trying one and seeing.
+	// PaymentMode is how this node's interactive time is paid for, and it is
+	// always "session": a metered credit whose unburned remainder comes back.
+	// Older builds also advertised "direct" (prepaid, not refundable), which a
+	// current client does not buy — so it stays published for a client to
+	// check rather than assume.
 	PaymentMode string `json:"payment_mode,omitempty"`
 
 	// PriceTinybarsPerSecond is the rate a session's credit burns at. Per
@@ -104,14 +102,6 @@ type GPU struct {
 	Model     *string `json:"model"`
 	VRAMMb    *int    `json:"vram_mb"`
 	Reason    string  `json:"reason,omitempty"`
-}
-
-// Limits are the per-job caps a renter is buying within.
-type Limits struct {
-	MaxSeconds    int   `json:"max_seconds"`
-	MemoryMB      int64 `json:"memory_mb"`
-	CPUCores      int   `json:"cpu_cores"`
-	MaxArtifactMB int64 `json:"max_artifact_mb"`
 }
 
 // Heartbeat is what the node POSTs to the registry: its spec, plus the two
@@ -146,22 +136,17 @@ func Build(cfg config.Config, version, feePayer string, detected runner.GPU, lea
 			MinMinutes:             cfg.Leases.MinMinutes,
 			MaxMinutes:             cfg.Leases.MaxMinutes,
 			MaxTotalMinutes:        cfg.Leases.MaxTotalMinutes,
-			// Only a named tunnel carries TCP, and SSH is TCP. Advertising a
-			// terminal a quick tunnel cannot provide would sell something that
-			// does not exist.
-			SSH:             cfg.Leases.Tunnel.Mode != config.TunnelQuick,
-			Jupyter:         true,
-			GPU:             leaseGPU,
-			MemoryMB:        cfg.Leases.Limits.MemoryMB,
-			CPUCores:        cfg.Leases.Limits.CPUCores,
-			WorkspaceGB:     cfg.Leases.Limits.WorkspaceGB,
-			EgressAllowlist: cfg.Leases.Egress.Allowlist,
+			SSH:                    false, // a quick tunnel carries no TCP, so there is never an SSH route
+			Jupyter:                true,
+			GPU:                    leaseGPU,
+			MemoryMB:               cfg.Leases.Limits.MemoryMB,
+			CPUCores:               cfg.Leases.Limits.CPUCores,
+			WorkspaceGB:            cfg.Leases.Limits.WorkspaceGB,
+			EgressAllowlist:        cfg.Leases.Egress.Allowlist,
 		}
-		leases.PaymentMode = cfg.Leases.PaymentMode
-		if cfg.Leases.PaymentMode == config.PaymentSession {
-			leases.PriceTinybarsPerSecond = sessionPrice(cfg.Leases)
-			leases.ChunkSeconds = cfg.Leases.SessionChunkSeconds
-		}
+		leases.PaymentMode = config.PaymentSession
+		leases.PriceTinybarsPerSecond = sessionPrice(cfg.Leases)
+		leases.ChunkSeconds = cfg.Leases.SessionChunkSeconds
 	}
 
 	return Spec{
@@ -176,19 +161,11 @@ func Build(cfg config.Config, version, feePayer string, detected runner.GPU, lea
 		AuditTopic:       auditTopic(cfg),
 		AgentVersion:     version,
 		PayTo:            cfg.PayTo,
-		PriceTinybars:    cfg.PriceTinybars,
 		FacilitatorURL:   cfg.FacilitatorURL,
 		Network:          cfg.Network,
 		Asset:            cfg.Asset,
-		ImageAllowlist:   cfg.ImageAllowlist,
 		FeePayer:         feePayer,
 		GPU:              gpu,
-		Limits: Limits{
-			MaxSeconds:    cfg.Limits.MaxSeconds,
-			MemoryMB:      cfg.Limits.MemoryMB,
-			CPUCores:      cfg.Limits.CPUCores,
-			MaxArtifactMB: cfg.Limits.MaxArtifactMB,
-		},
 	}
 }
 

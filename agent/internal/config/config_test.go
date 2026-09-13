@@ -30,30 +30,6 @@ func TestValidateRejectsBadPayTo(t *testing.T) {
 	}
 }
 
-// Prices are strings in tinybars end to end. A float here would silently lose
-// precision on real amounts, so anything non-integral must be refused.
-func TestValidateRejectsNonIntegerPrice(t *testing.T) {
-	for _, price := range []string{"0.001", "1e5", "-100", "", "abc"} {
-		cfg := validConfig()
-		cfg.PriceTinybars = price
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("price_tinybars %q should have been rejected", price)
-		}
-	}
-}
-
-func TestValidateRejectsEmptyAllowlist(t *testing.T) {
-	cfg := validConfig()
-	cfg.ImageAllowlist = nil
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("an empty allowlist should be rejected")
-	}
-	if !strings.Contains(err.Error(), "allowlist") {
-		t.Fatalf("error should name the allowlist, got: %v", err)
-	}
-}
-
 func TestValidateForSetupAllowsHCSBeforeTopicCreation(t *testing.T) {
 	cfg := validConfig()
 	cfg.Hedera.Enabled = true
@@ -101,26 +77,10 @@ func TestValidateRejectsListingWithoutAnAddressOrToken(t *testing.T) {
 	}
 }
 
-func TestAllowsImageMatchesExactly(t *testing.T) {
-	cfg := validConfig()
-	cfg.ImageAllowlist = []string{"python:3.11-slim"}
-
-	if !cfg.AllowsImage("python:3.11-slim") {
-		t.Fatal("an allowlisted image should be allowed")
-	}
-	// No prefix or tag fuzziness: "python" must not open the door to
-	// "python:latest", and a lookalike registry must not match.
-	for _, image := range []string{"python", "python:latest", "evil/python:3.11-slim", "python:3.11-slim-extra"} {
-		if cfg.AllowsImage(image) {
-			t.Fatalf("image %q should not have matched the allowlist", image)
-		}
-	}
-}
-
 func TestSaveAndLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
 	original := validConfig()
-	original.PriceTinybars = "250000"
+	original.Leases.PriceTinybarsPerMinute = "250000"
 	original.GPUEnabled = true
 
 	if err := Save(path, original); err != nil {
@@ -131,7 +91,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.PayTo != original.PayTo || loaded.PriceTinybars != original.PriceTinybars {
+	if loaded.PayTo != original.PayTo || loaded.Leases.PriceTinybarsPerMinute != original.Leases.PriceTinybarsPerMinute {
 		t.Fatalf("round trip lost data: %+v", loaded)
 	}
 	if !loaded.GPUEnabled {
@@ -155,8 +115,8 @@ func TestLoadFillsInDefaults(t *testing.T) {
 	if cfg.FacilitatorURL != Default().FacilitatorURL {
 		t.Fatalf("facilitator_url should have defaulted, got %q", cfg.FacilitatorURL)
 	}
-	if cfg.Limits.MaxSeconds != Default().Limits.MaxSeconds {
-		t.Fatalf("limits should have defaulted, got %+v", cfg.Limits)
+	if cfg.Leases.Limits.MemoryMB != Default().Leases.Limits.MemoryMB {
+		t.Fatalf("lease limits should have defaulted, got %+v", cfg.Leases.Limits)
 	}
 }
 
@@ -237,9 +197,6 @@ func TestLeasePathsResolveAgainstTheConfigDirectory(t *testing.T) {
 	if !filepath.IsAbs(leases.CAKeyPath) || !strings.HasPrefix(leases.CAKeyPath, "/etc/cleargate") {
 		t.Fatalf("ca_key_path should have resolved under the config directory, got %q", leases.CAKeyPath)
 	}
-	if !strings.HasPrefix(leases.Tunnel.ConfigDir, "/etc/cleargate") {
-		t.Fatalf("tunnel config dir should have resolved under the config directory, got %q", leases.Tunnel.ConfigDir)
-	}
 
 	// An operator who gave an absolute path meant it.
 	absolute := Leases{Enabled: true, CAKeyPath: "/var/lib/cleargate/ca"}
@@ -268,6 +225,9 @@ func TestEscrowPaymentModeStillLoadsAndMeansSession(t *testing.T) {
 		"price_tinybars: \"100000\"\n" +
 		"hedera:\n" +
 		"  enabled: true\n" +
+		"hcs:\n" +
+		"  enabled: true\n" +
+		"  topic_id: \"0.0.7777\"\n" +
 		"leases:\n" +
 		"  enabled: true\n" +
 		"  payment_mode: escrow\n" +
@@ -292,5 +252,52 @@ func TestEscrowPaymentModeStillLoadsAndMeansSession(t *testing.T) {
 		t.Errorf("low_credit_threshold_seconds (%d) is not below session_chunk_seconds (%d), "+
 			"so every session would open already low on credit",
 			cfg.Leases.LowCreditThresholdSeconds, cfg.Leases.SessionChunkSeconds)
+	}
+}
+
+// "named" and "off" were removed as tunnel modes: leases are published only
+// through a quick tunnel. A config still naming either must fail with a way
+// forward, not a bare "invalid value".
+func TestRemovedTunnelModesAreRejected(t *testing.T) {
+	for _, mode := range []string{"named", "off"} {
+		cfg := validConfig()
+		cfg.Leases.Enabled = true
+		cfg.Leases.Tunnel.Mode = mode
+
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("tunnel mode %q was accepted", mode)
+		}
+		if !strings.Contains(err.Error(), "has been removed") {
+			t.Fatalf("mode %q: error does not explain the removal: %v", mode, err)
+		}
+	}
+}
+
+// "direct" — prepaid slices with no refund — was removed. A node still
+// configured for it must fail with a way forward, not start selling a mode that
+// holds a renter's money differently from the one it was set up for.
+func TestDirectPaymentModeIsRefused(t *testing.T) {
+	cfg := validConfig()
+	cfg.Leases.Enabled = true
+	cfg.Leases.PaymentMode = "direct"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("payment_mode direct was accepted")
+	}
+	if !strings.Contains(err.Error(), "has been removed") {
+		t.Fatalf("error does not explain the removal: %v", err)
+	}
+}
+
+// Leasing turns the node into something that owes renters money back, so it
+// cannot start without the audit trail and the key that pay it.
+func TestLeasingRequiresTheRefundTrail(t *testing.T) {
+	cfg := validConfig()
+	cfg.Leases.Enabled = true
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("leasing without hedera and hcs was accepted")
 	}
 }

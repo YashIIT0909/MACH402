@@ -29,56 +29,58 @@ import (
 func newSetupCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Write a config.yaml and check this machine can run jobs",
+		Short: "Write a config.yaml and check this machine can sell sessions",
 		Long: "Prompts for the Hedera account that should receive payment, then " +
-			"preflights Docker and the GPU so problems surface now rather than " +
-			"during someone's paid job.",
+			"preflights Docker, the GPU, the lease image, the tunnel and the operator " +
+			"key so problems surface now rather than during someone's paid session.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts := setupOptions{}
 			opts.configPath, _ = cmd.Flags().GetString("config")
 			opts.payTo, _ = cmd.Flags().GetString("pay-to")
-			opts.price, _ = cmd.Flags().GetString("price-tinybars")
 			opts.registryURL, _ = cmd.Flags().GetString("registry-url")
 			opts.publicURL, _ = cmd.Flags().GetString("public-url")
-			opts.gpu, _ = cmd.Flags().GetBool("gpu")
 			opts.force, _ = cmd.Flags().GetBool("force")
-			opts.leases, _ = cmd.Flags().GetBool("enable-leases")
 			opts.leasePrice, _ = cmd.Flags().GetString("lease-price-tinybars-per-minute")
-			opts.tunnelMode, _ = cmd.Flags().GetString("tunnel-mode")
-			opts.hcs, _ = cmd.Flags().GetBool("enable-hcs")
-			opts.sessions, _ = cmd.Flags().GetBool("enable-sessions")
 			opts.identityContract, _ = cmd.Flags().GetString("identity-contract")
-			opts.selfSettle, _ = cmd.Flags().GetBool("self-settle")
 			opts.hederaSidecar, _ = cmd.Flags().GetString("hedera-sidecar")
 			return setup(cmd.Context(), opts)
 		},
 	}
 	cmd.Flags().String("pay-to", "", "Hedera account that receives payment, e.g. 0.0.1234")
-	cmd.Flags().String("price-tinybars", "", "flat price per job in tinybars (100000 = 0.001 HBAR)")
+	// Nodes no longer sell batch jobs, so there is no job price. Accepted and
+	// ignored so installers that still pass it keep working.
+	cmd.Flags().String("price-tinybars", "", "ignored: nodes sell metered sessions only")
+	_ = cmd.Flags().MarkDeprecated("price-tinybars", "nodes sell metered sessions only; this flag is ignored")
 	cmd.Flags().String("registry-url", "", "registry to list this node on; empty keeps it unlisted")
 	cmd.Flags().String("public-url", "", "how renters reach this node, e.g. http://1.2.3.4:8402 (required with --registry-url)")
-	cmd.Flags().Bool("gpu", false, "offer GPU passthrough (requires the NVIDIA Container Toolkit)")
-	// Deliberately separate from --gpu. Letting a stranger open a shell on your
-	// machine is a bigger ask than running their sandboxed batch job, even
-	// isolated, and it must never be switched on as a side effect of something
-	// else (implementation.md §8.2).
-	cmd.Flags().Bool("enable-leases", false,
-		"also sell timed interactive access — an SSH shell and a Jupyter server in a container on this machine")
+	// Every node sells GPU time, so there is nothing to choose. --gpu is still
+	// accepted so scripts written when it was opt-in keep working, but it is
+	// hidden and ignored.
+	cmd.Flags().Bool("gpu", true, "ignored: GPU passthrough is always on")
+	_ = cmd.Flags().MarkDeprecated("gpu", "the GPU is always on; this flag is ignored")
+	// Sessions are all a node sells, so leasing — and the HCS topic and operator
+	// key it needs — is always on. Both flags are accepted and ignored so
+	// installers written when these were choices keep working.
+	cmd.Flags().Bool("enable-leases", true, "ignored: every node sells metered sessions")
+	_ = cmd.Flags().MarkDeprecated("enable-leases", "every node sells metered sessions; this flag is ignored")
 	cmd.Flags().String("lease-price-tinybars-per-minute", "",
-		"price of one minute of interactive time, in tinybars (only with --enable-leases)")
-	cmd.Flags().String("tunnel-mode", "",
-		"how renters reach a lease: \"quick\" (no Cloudflare account, Jupyter only) or \"named\" (registry-provisioned, adds SSH)")
-	// Both of these create a node-local Hedera key, which is the first time
-	// anything in this repo puts key material on a provider's machine. That is
-	// why they are explicit flags rather than implied by anything else.
-	cmd.Flags().Bool("enable-hcs", false,
-		"publish every settlement to a Hedera Consensus Service topic you own, so earnings can be audited without trusting us")
-	cmd.Flags().Bool("enable-sessions", false,
-		"sell interactive time as a metered credit, refunding whatever a renter does not burn (requires --enable-hcs)")
+		"price of one minute of a session, in tinybars, charged by the second (200000 = 0.002 HBAR)")
+	// Leases are always published through a quick tunnel. --tunnel-mode is still
+	// accepted so installers written when there was a choice keep working, but it
+	// is hidden and ignored.
+	cmd.Flags().String("tunnel-mode", "", "ignored: leases always use a Cloudflare quick tunnel")
+	_ = cmd.Flags().MarkDeprecated("tunnel-mode", "leases always use a quick tunnel; this flag is ignored")
+	cmd.Flags().Bool("enable-hcs", true, "ignored: the audit topic is always on, because sessions need it")
+	_ = cmd.Flags().MarkDeprecated("enable-hcs", "the audit topic is always on; this flag is ignored")
+	// Interactive time is only sold as a metered session now, so there is
+	// nothing to enable separately. Both flags are still accepted so installers
+	// written when there was a choice keep working, but they are ignored.
+	cmd.Flags().Bool("enable-sessions", false, "ignored: --enable-leases always sells metered sessions")
+	_ = cmd.Flags().MarkDeprecated("enable-sessions", "--enable-leases always sells metered sessions; this flag is ignored")
 	cmd.Flags().String("identity-contract", "",
 		"IdentityRegistry contract for `cleargate-node register`")
-	cmd.Flags().Bool("self-settle", false,
-		"pay session refunds from this node's operator account automatically, instead of leaving them to be paid by hand")
+	cmd.Flags().Bool("self-settle", false, "ignored: session refunds are always paid automatically")
+	_ = cmd.Flags().MarkDeprecated("self-settle", "session refunds are always paid automatically; this flag is ignored")
 	// A bare command name is resolved against the invoking shell's PATH every
 	// time the node starts — fine for a developer's own terminal, fragile for
 	// anything unattended (a systemd unit, a fresh terminal that never sourced
@@ -96,19 +98,12 @@ func newSetupCommand() *cobra.Command {
 type setupOptions struct {
 	configPath  string
 	payTo       string
-	price       string
 	registryURL string
 	publicURL   string
-	gpu         bool
 	force       bool
-	leases      bool
 	leasePrice  string
-	tunnelMode  string
 
-	hcs              bool
-	sessions         bool
 	identityContract string
-	selfSettle       bool
 	hederaSidecar    string
 }
 
@@ -119,42 +114,25 @@ func setup(ctx context.Context, opts setupOptions) error {
 	}
 
 	cfg := config.Default()
-	cfg.GPUEnabled = opts.gpu
-	cfg.Leases.Enabled = opts.leases
+	// Always on: every ClearGate node sells GPU time. Whether the card can
+	// actually be passed through is still checked below, and at every start.
+	cfg.GPUEnabled = true
+	cfg.Leases.Enabled = true
 	if opts.leasePrice != "" {
 		if _, err := strconv.ParseUint(strings.TrimSpace(opts.leasePrice), 10, 64); err != nil {
 			return fmt.Errorf("lease price must be a whole number of tinybars per minute: %w", err)
 		}
 		cfg.Leases.PriceTinybarsPerMinute = strings.TrimSpace(opts.leasePrice)
 	}
-	if opts.tunnelMode != "" {
-		cfg.Leases.Tunnel.Mode = strings.TrimSpace(opts.tunnelMode)
-	}
 
-	// Sessions need the sidecar to publish the refund-owed trail and, with
-	// --self-settle, to pay the refund; HCS needs it to publish at all. Either
-	// implies the Hedera block is on, so a provider does not have to know that
-	// and pass a third flag.
-	cfg.Hedera.Enabled = opts.hcs || opts.sessions
-	cfg.HCS.Enabled = opts.hcs
+	// A session needs the sidecar twice over: to publish the refund-owed trail
+	// to an audit topic, and to pay the refund when it ends. So both are on.
+	cfg.Hedera.Enabled = true
+	cfg.HCS.Enabled = true
 	if opts.hederaSidecar != "" {
 		cfg.Hedera.Sidecar = strings.TrimSpace(opts.hederaSidecar)
 	}
 	cfg.Identity.RegistryContractID = strings.TrimSpace(opts.identityContract)
-	if opts.sessions {
-		cfg.Leases.PaymentMode = config.PaymentSession
-		cfg.Leases.SelfSettle = opts.selfSettle
-		if !cfg.Leases.Enabled {
-			return errors.New("--enable-sessions only applies to interactive time; pass --enable-leases too")
-		}
-		// Refused here rather than at the first sale. The running refund-owed
-		// trail is what makes prepaying a stranger checkable, and a session node
-		// without it is selling a promise with nothing behind it.
-		if !cfg.HCS.Enabled {
-			return errors.New("--enable-sessions needs --enable-hcs: the audit topic is where the node " +
-				"publishes what it owes a renter while their session runs")
-		}
-	}
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -164,23 +142,9 @@ func setup(ctx context.Context, opts setupOptions) error {
 	}
 	cfg.PayTo = strings.TrimSpace(payTo)
 
-	price := opts.price
-	if price == "" {
-		entered := prompt(reader, fmt.Sprintf("Price per job in tinybars [%s]: ", cfg.PriceTinybars))
-		if entered != "" {
-			price = entered
-		}
-	}
-	if price != "" {
-		if _, err := strconv.ParseUint(strings.TrimSpace(price), 10, 64); err != nil {
-			return fmt.Errorf("price must be a whole number of tinybars: %w", err)
-		}
-		cfg.PriceTinybars = strings.TrimSpace(price)
-	}
-
 	cfg.NodeID = newNodeID()
 
-	// Listing is opt-in. A node with no registry_url still sells jobs to any
+	// Listing is opt-in. A node with no registry_url still sells sessions to any
 	// renter who knows its URL; it just does not appear on the website.
 	cfg.RegistryURL = strings.TrimRight(strings.TrimSpace(opts.registryURL), "/")
 	cfg.PublicURL = strings.TrimRight(strings.TrimSpace(opts.publicURL), "/")
@@ -200,7 +164,6 @@ func setup(ctx context.Context, opts setupOptions) error {
 	// it had already issued.
 	configDir := filepath.Dir(path)
 	cfg.Leases.CAKeyPath = filepath.Join(configDir, "lease-ca")
-	cfg.Leases.Tunnel.ConfigDir = filepath.Join(configDir, "cloudflared")
 	cfg.Hedera.OperatorKeyPath = filepath.Join(configDir, "hedera-operator")
 
 	if err := cfg.ValidateForSetup(); err != nil {
@@ -257,7 +220,7 @@ func setup(ctx context.Context, opts setupOptions) error {
 
 	// A registry that is unreachable is worth knowing about now, while the
 	// provider is still watching, rather than as a node that quietly never
-	// appears on the website. It is not fatal: the node sells jobs regardless.
+	// appears on the website. It is not fatal: the node sells sessions regardless.
 	if cfg.RegistryURL != "" {
 		if err := pingRegistry(ctx, cfg.RegistryURL); err != nil {
 			fmt.Printf("  registry     unreachable — %v\n", err)
@@ -277,19 +240,15 @@ func setup(ctx context.Context, opts setupOptions) error {
 	fmt.Printf("\nwrote %s\n", path)
 	fmt.Printf("node id      %s\n", cfg.NodeID)
 	fmt.Printf("paid into    %s\n", cfg.PayTo)
-	fmt.Printf("price        %s tinybars per job\n", cfg.PriceTinybars)
 	if cfg.RegistryURL != "" {
 		fmt.Printf("listed on    %s as %s\n", cfg.RegistryURL, cfg.PublicURL)
 	} else {
 		fmt.Printf("listed on    nothing — this node is private\n")
 	}
-	if cfg.Leases.Enabled {
-		fmt.Printf("leases       on, %s tinybars per minute, %s tunnel\n",
-			cfg.Leases.PriceTinybarsPerMinute, cfg.Leases.Tunnel.Mode)
-		fmt.Printf("             renters get an SSH shell and a Jupyter server in a container here\n")
-	} else {
-		fmt.Printf("leases       off — this node sells batch jobs only\n")
-	}
+	fmt.Printf("sessions     %s tinybars per minute, burned by the second\n",
+		cfg.Leases.PriceTinybarsPerMinute)
+	fmt.Printf("             renters get a Jupyter server in a container here, through a quick tunnel,\n")
+	fmt.Printf("             and unused credit is refunded automatically from the operator account\n")
 	fmt.Printf("\nstart it with:  cleargate-node serve --config %s\n", path)
 	return nil
 }
@@ -313,24 +272,14 @@ func preflightLeases(ctx context.Context, cfg *config.Config, docker *runner.Doc
 	fmt.Printf("  ssh ca       %s\n", cfg.Leases.CAKeyPath)
 	fmt.Printf("               %s\n", truncateKey(ca.PublicKey()))
 
-	// cloudflared is how a renter reaches this machine at all. "off" is the one
-	// mode that does not need it, and it only makes sense on a LAN.
-	if cfg.Leases.Tunnel.Mode != config.TunnelOff {
-		binary := cfg.Leases.Tunnel.Binary
-		if _, err := exec.LookPath(binary); err != nil {
-			return fmt.Errorf("  tunnel: %q is not installed, and renters cannot reach a lease without it.\n"+
-				"  Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/,\n"+
-				"  or re-run with --tunnel-mode off if this machine is already directly reachable", binary)
-		}
-		fmt.Printf("  tunnel       %s, %s mode\n", binary, cfg.Leases.Tunnel.Mode)
-		if cfg.Leases.Tunnel.Mode == config.TunnelQuick {
-			fmt.Printf("               Jupyter only — named mode adds an SSH terminal\n")
-		}
-		if cfg.Leases.Tunnel.Mode == config.TunnelNamed && cfg.RegistryURL == "" {
-			return fmt.Errorf("  tunnel: named mode needs a registry to provision the tunnel; " +
-				"pass --registry-url, or use --tunnel-mode quick")
-		}
+	// cloudflared is how a renter reaches this machine at all: every lease is
+	// published through a tunnel, so there is no mode that does without it.
+	binary := cfg.Leases.Tunnel.Binary
+	if _, err := exec.LookPath(binary); err != nil {
+		return fmt.Errorf("  tunnel: %q is not installed, and renters cannot reach a lease without it.\n"+
+			"  Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/", binary)
 	}
+	fmt.Printf("  tunnel       %s, quick tunnel — Jupyter only, no SSH\n", binary)
 
 	// A lease settles only once its container is up and reachable, so there is
 	// no staging phase to hide an image pull in. The image has to be here first.
@@ -534,14 +483,14 @@ func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
 	cfg.Hedera.OperatorAccountID = key.AccountID
 	fmt.Printf("               %s, balance %s tinybars\n", key.AccountID, key.BalanceTinybars)
 
-	// A session node with self_settle on pays refunds out of the operator
+	// A session node pays refunds out of the operator
 	// account, which is a genuine change to what that key is for: it used to
 	// hold a fee float and nothing else. Checked here, because a provider who
 	// discovers it when a renter is owed money discovers it far too late.
 	//
 	// Earnings are untouched by this. They land in pay_to, which still signs
 	// nothing and whose key this machine still does not have.
-	if cfg.Leases.PaymentMode == config.PaymentSession && cfg.Leases.SelfSettle {
+	if cfg.Leases.Enabled {
 		chunk, err := sessionChunkCost(cfg)
 		if err != nil {
 			return false, fmt.Errorf("  sessions: %w", err)

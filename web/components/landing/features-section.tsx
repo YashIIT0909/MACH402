@@ -6,30 +6,30 @@ import { Eyebrow, useSectionReveal } from "./primitives";
 const features = [
   {
     number: "01",
-    title: "Paid before it runs",
+    title: "Paid only once it answers",
     description:
-      "The node answers 402 with what it charges, verifies the signed transfer, accepts the work, and settles — in that order, immediately. A signed payment expires in 300 seconds and a training run outlives that many times over, so settlement never waits for the job to finish.",
+      "The node answers 402 with what a chunk of time costs, verifies the signed transfer, starts the container, proves it is reachable, and settles — in that order, inside the 300 seconds a signed payment lives. A session that never came up costs nothing, and whatever credit is left when it stops comes back.",
     visual: "settle",
   },
   {
     number: "02",
-    title: "The node holds no key",
+    title: "Earnings need no key",
     description:
-      "A provider gives the daemon an account id to be paid into, never a private key, and the binary links no Hedera SDK at all. The merchant side of x402 needs only JSON and HTTP calls to a facilitator. There is nothing on that machine to steal.",
+      "A provider gives the daemon an account id to be paid into, never its key, and the binary links no Hedera SDK at all. The only key on the machine is a separate operator key that pays refunds and topic fees — a compromise costs that float, never the earnings.",
     visual: "nokey",
   },
   {
     number: "03",
-    title: "The container is sealed",
+    title: "The container is fenced in",
     description:
-      "Jobs run from an allowlisted image with no network at all, a read-only root filesystem, capped memory, CPU and wall clock. A dataset URL is fetched by the node and mounted at /data — the container itself can never reach out.",
+      "A session runs on an internal network with no route off the host except a proxy that allows package and model registries and refuses the rest. Every capability is dropped but the few sshd needs, and the workspace is wiped when the session ends.",
     visual: "sandbox",
   },
   {
     number: "04",
     title: "Nodes announce themselves",
     description:
-      "A provider's box is usually behind NAT, so discovery is push, not poll. The node heartbeats every 30 seconds and goes offline 90 seconds after it stops — or the instant it says so on shutdown. A registry that is down never interrupts a paid job.",
+      "A provider's box is usually behind NAT, so discovery is push, not poll. The node heartbeats every 30 seconds and goes offline 90 seconds after it stops — or the instant it says so on shutdown. A registry that is down never interrupts a paid session.",
     visual: "heartbeat",
   },
 ];
@@ -37,14 +37,14 @@ const features = [
 /** Renter pays, node accepts, transaction id comes back. */
 function SettleVisual() {
   return (
-    <svg viewBox="0 0 200 160" className="h-full w-full" aria-hidden="true">
+    <svg viewBox="0 0 200 160" className="h-full w-full font-mono" aria-hidden="true">
       <rect x="12" y="52" width="52" height="52" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="38" y="82" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="currentColor">
+      <text x="38" y="82" textAnchor="middle" fontSize="9" fill="currentColor">
         renter
       </text>
 
       <rect x="136" y="52" width="52" height="52" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="162" y="82" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="currentColor">
+      <text x="162" y="82" textAnchor="middle" fontSize="9" fill="currentColor">
         node
       </text>
 
@@ -57,14 +57,14 @@ function SettleVisual() {
         </animateMotion>
       </circle>
 
-      <text x="100" y="38" textAnchor="middle" fontSize="11" fontFamily="monospace" fill="currentColor" opacity="0.35">
+      <text x="100" y="38" textAnchor="middle" fontSize="11" fill="currentColor" opacity="0.35">
         402
         <animate attributeName="opacity" values="0.8;0.15;0.15" dur="2s" repeatCount="indefinite" />
       </text>
 
       <line x1="136" y1="96" x2="64" y2="96" stroke="currentColor" strokeWidth="1" opacity="0.2" />
 
-      <text x="100" y="132" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="currentColor" opacity="0">
+      <text x="100" y="132" textAnchor="middle" fontSize="9" fill="currentColor" opacity="0">
         0.0.x@1730.0
         <animate attributeName="opacity" values="0;0;0.7;0.7" dur="2s" repeatCount="indefinite" />
       </text>
@@ -75,9 +75,9 @@ function SettleVisual() {
 /** A key that approaches the node and is turned away every time. */
 function NoKeyVisual() {
   return (
-    <svg viewBox="0 0 200 160" className="h-full w-full" aria-hidden="true">
+    <svg viewBox="0 0 200 160" className="h-full w-full font-mono" aria-hidden="true">
       <rect x="98" y="42" width="76" height="76" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="136" y="136" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="currentColor" opacity="0.6">
+      <text x="136" y="136" textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.6">
         node
       </text>
 
@@ -112,10 +112,10 @@ function NoKeyVisual() {
   );
 }
 
-/** A container with its network severed and a dataset volume mounted instead. */
+/** A container with no direct route out — only the egress proxy below it. */
 function SandboxVisual() {
   return (
-    <svg viewBox="0 0 200 160" className="h-full w-full" aria-hidden="true">
+    <svg viewBox="0 0 200 160" className="h-full w-full font-mono" aria-hidden="true">
       <rect x="52" y="26" width="96" height="76" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
 
       {/* Work happening inside. */}
@@ -149,15 +149,15 @@ function SandboxVisual() {
           <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite" />
         </line>
       </g>
-      <text x="21" y="84" textAnchor="middle" fontSize="7.5" fontFamily="monospace" fill="currentColor" opacity="0.55">
+      <text x="21" y="84" textAnchor="middle" fontSize="7.5" fill="currentColor" opacity="0.55">
         net
       </text>
 
-      {/* The only way data gets in: mounted by the node, host side. */}
+      {/* The only way out: the deny-by-default egress proxy. */}
       <line x1="100" y1="102" x2="100" y2="120" stroke="currentColor" strokeWidth="2" opacity="0.5" />
       <rect x="70" y="120" width="60" height="24" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="100" y="136" textAnchor="middle" fontSize="10" fontFamily="monospace" fill="currentColor">
-        /data
+      <text x="100" y="136" textAnchor="middle" fontSize="10" fill="currentColor">
+        proxy
       </text>
     </svg>
   );
@@ -166,14 +166,14 @@ function SandboxVisual() {
 /** A beat travelling from node to registry, and the window it has to arrive in. */
 function HeartbeatVisual() {
   return (
-    <svg viewBox="0 0 200 160" className="h-full w-full" aria-hidden="true">
+    <svg viewBox="0 0 200 160" className="h-full w-full font-mono" aria-hidden="true">
       <rect x="10" y="58" width="44" height="44" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="32" y="118" textAnchor="middle" fontSize="8" fontFamily="monospace" fill="currentColor" opacity="0.6">
+      <text x="32" y="118" textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.6">
         node
       </text>
 
       <rect x="146" y="58" width="44" height="44" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text x="168" y="118" textAnchor="middle" fontSize="8" fontFamily="monospace" fill="currentColor" opacity="0.6">
+      <text x="168" y="118" textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.6">
         registry
       </text>
 
@@ -195,7 +195,7 @@ function HeartbeatVisual() {
         <animate attributeName="stroke-dashoffset" values="200;0" dur="2s" repeatCount="indefinite" />
       </path>
 
-      <text x="100" y="40" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="currentColor" opacity="0.5">
+      <text x="100" y="40" textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.5">
         every 30s
       </text>
 
@@ -224,23 +224,29 @@ function AnimatedVisual({ type }: { type: string }) {
 function FeatureCard({ feature }: { feature: (typeof features)[number] }) {
   return (
     <div data-reveal className="group relative">
-      <div className="flex flex-col gap-6 border-b border-foreground/10 py-12 lg:flex-row lg:gap-16 lg:py-20">
-        <div className="shrink-0">
-          <span className="font-mono text-sm text-accent">{feature.number}</span>
+      {/*
+       * The numeral and the title share one line and one size, so they read as
+       * a single label rather than a small tag floating beside a large heading
+       * — the same pairing the how-it-works steps use. Text is top-aligned so
+       * that pairing holds whatever the diagram's height; only the diagram
+       * centres itself.
+       */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-8 border-b border-foreground/10 py-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-16 lg:py-14">
+        {/* Two Ticketing advances at subtitle size (0.9 × --tk); `2ch` here would measure the body font. */}
+        <div className="grid min-w-0 grid-cols-[calc(var(--tk)*0.9)_minmax(0,1fr)] items-baseline gap-x-4 sm:gap-x-6">
+          <span className="type-subtitle text-accent">{feature.number}</span>
+          <h3 className="type-subtitle transition-transform ease-brand dur-slow group-hover:translate-x-2">
+            {feature.title}
+          </h3>
+          {/* Spans the row on a phone rather than sitting indented behind the numeral. */}
+          <p className="col-span-2 mt-3 max-w-[40rem] text-muted-foreground sm:col-span-1 sm:col-start-2">
+            {feature.description}
+          </p>
         </div>
 
-        <div className="grid flex-1 items-center gap-8 lg:grid-cols-2">
-          <div>
-            <h3 className="type-subtitle mb-3 transition-transform ease-brand dur-slow group-hover:translate-x-2">
-              {feature.title}
-            </h3>
-            <p className="text-muted-foreground">{feature.description}</p>
-          </div>
-
-          <div className="flex justify-center lg:justify-end">
-            <div className="h-32 w-40 text-foreground/80 transition-colors ease-brand dur-slow group-hover:text-accent">
-              <AnimatedVisual type={feature.visual} />
-            </div>
+        <div className="flex justify-center lg:justify-end">
+          <div className="h-40 w-52 text-foreground/80 transition-colors ease-brand dur-slow group-hover:text-accent">
+            <AnimatedVisual type={feature.visual} />
           </div>
         </div>
       </div>

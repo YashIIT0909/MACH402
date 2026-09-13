@@ -16,6 +16,8 @@ import (
 // Receipt is one settled payment. Amounts are strings, in the asset's smallest
 // unit, and are never converted to floating point.
 type Receipt struct {
+	// JobID is the lease this payment was for. It keeps its old name, on disk
+	// too, so receipts written when nodes also sold batch jobs still read.
 	JobID          string `json:"job_id"`
 	Transaction    string `json:"transaction"`
 	Payer          string `json:"payer"`

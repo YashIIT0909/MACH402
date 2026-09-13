@@ -13,9 +13,8 @@ import (
 
 // newSidecar builds the handle to the `cleargate-hedera` child process.
 //
-// Returns nil when the provider never opted in, which is the common case and
-// not an error: a node with no Hedera block sells jobs and direct-paid leases
-// exactly as it always did.
+// Returns nil when the Hedera block is off. config.validate refuses that on any
+// node that sells sessions, so in practice this is a node selling nothing.
 func newSidecar(cfg config.Config) *hedera.Sidecar {
 	if !cfg.Hedera.Enabled {
 		return nil
@@ -47,33 +46,24 @@ func enableHedera(_ context.Context, cfg config.Config, server *httpapi.Server, 
 		log.Info("publishing settlements to the audit topic", "topic", cfg.HCS.TopicID)
 	}
 
-	if !cfg.Leases.Enabled || cfg.Leases.PaymentMode != config.PaymentSession {
+	if !cfg.Leases.Enabled {
 		return nil
 	}
 	if !cfg.HCS.Enabled {
 		// Belt and braces with config.validate, which refuses this at load. A
 		// session node that cannot publish its refund-owed trail is asking
 		// renters to prepay against nothing but a promise.
-		return errors.New("leases.payment_mode is session but hcs.enabled is off; " +
+		return errors.New("leases.enabled is on but hcs.enabled is off; " +
 			"the refund-owed audit trail is what makes a metered session checkable")
 	}
 
-	// self_settle off means the node meters and publishes what it owes but
-	// cannot return it itself. Weaker, and the honest default: paying refunds
-	// means the operator account holds more than a fee float.
-	var refunder *hedera.Sidecar
-	if cfg.Leases.SelfSettle {
-		refunder = sidecar
-	} else {
-		log.Warn("selling metered sessions with leases.self_settle off: " +
-			"refunds will be published as owed and must be paid by hand")
-	}
-
-	server.EnableSessions(refunder)
+	// Refunds are always paid by the node itself, from the operator account.
+	// Leaving them to be paid by hand is not an option a provider is offered:
+	// a renter who stops early is owed their credit back, not a promise of it.
+	server.EnableSessions(sidecar)
 	log.Info("selling metered, refundable sessions",
 		"chunk_seconds", cfg.Leases.SessionChunkSeconds,
 		"audit_topic", cfg.HCS.TopicID,
-		"self_settle", cfg.Leases.SelfSettle,
 	)
 	return nil
 }

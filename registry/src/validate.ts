@@ -38,9 +38,9 @@ export const heartbeatSchema = z.object({
   agent_version: shortText,
   public_url: httpUrl,
   pay_to: hederaId,
-  // A string, always: amounts are never parsed into floats anywhere in
-  // ClearGate, and tinybars overflow a double at scale.
-  price_tinybars: z.string().regex(/^\d{1,20}$/, "price_tinybars must be a whole number of tinybars, as a string"),
+  // Sent by builds that also sold batch jobs, which nodes no longer do. Still
+  // accepted so those nodes keep beating; nothing reads them.
+  price_tinybars: z.string().regex(/^\d{1,20}$/, "price_tinybars must be a whole number of tinybars, as a string").optional(),
   facilitator_url: httpUrl,
   network: z.string().regex(/^hedera:[a-z]+$/, "network must be a Hedera CAIP-2 id such as hedera:testnet"),
   asset: hederaId,
@@ -52,16 +52,17 @@ export const heartbeatSchema = z.object({
     vram_mb: z.number().int().nonnegative().max(1_000_000).nullable().optional(),
     reason: z.string().max(500).optional(),
   }),
-  limits: z.object({
-    max_seconds: z.number().int().positive(),
-    memory_mb: z.number().int().positive(),
-    cpu_cores: z.number().int().positive(),
-    max_artifact_mb: z.number().int().positive(),
-  }),
-  image_allowlist: z.array(shortText).max(64),
+  limits: z
+    .object({
+      max_seconds: z.number().int().positive(),
+      memory_mb: z.number().int().positive(),
+      cpu_cores: z.number().int().positive(),
+      max_artifact_mb: z.number().int().positive(),
+    })
+    .optional(),
+  image_allowlist: z.array(shortText).max(64).optional(),
   /**
-   * Absent on a node that does not sell interactive leases, which is the
-   * default. Every number is bounded for the same reason the rest of this file
+   * What the node sells. Absent only on a node with leasing switched off. Every number is bounded for the same reason the rest of this file
    * bounds things: the website renders it, and a hostile node would otherwise
    * choose what it says.
    */

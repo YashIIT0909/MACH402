@@ -104,15 +104,18 @@ export function Eyebrow({
     <span
       {...rest}
       className={cn(
-        "type-label inline-flex items-center gap-3",
+        // Top-aligned with the rule dropped to the middle of the first line
+        // (0.6em of a 1.2em line), so a label that wraps on a phone keeps its
+        // rule beside its opening words instead of floating between two lines.
+        "type-eyebrow inline-flex items-start gap-3 [text-wrap:balance]",
         tone === "accent" ? "text-accent" : "text-muted-foreground",
         className,
       )}
     >
-      <span className={cn("h-px w-8", tone === "accent" ? "bg-accent/50" : "bg-foreground/30")} />
+      <span className={cn("mt-[0.6em] h-px w-8 shrink-0", tone === "accent" ? "bg-accent/50" : "bg-foreground/30")} />
       {children}
       {centered ? (
-        <span className={cn("h-px w-8", tone === "accent" ? "bg-accent/50" : "bg-foreground/30")} />
+        <span className={cn("mt-[0.6em] h-px w-8 shrink-0", tone === "accent" ? "bg-accent/50" : "bg-foreground/30")} />
       ) : null}
     </span>
   );

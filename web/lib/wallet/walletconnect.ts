@@ -42,7 +42,7 @@ export function walletConnectConnector(): WalletConnector {
       connector = new DAppConnector(
         {
           name: "ClearGate",
-          description: "Rent a GPU by the minute, paid with x402 on Hedera",
+          description: "Rent a GPU by the second, paid with x402 on Hedera",
           url: window.location.origin,
           icons: [`${window.location.origin}/favicon.ico`],
         },

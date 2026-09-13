@@ -166,9 +166,9 @@ func TestAwaitDepositStopsOnRejection(t *testing.T) {
 		calls++
 		if strings.HasPrefix(r.URL.Path, "/api/v1/contracts/results/") {
 			writeJSON(w, map[string]any{
-				"result":       "CONTRACT_REVERT_EXECUTED",
-				"address":      "0xd583d91742f8888f5b106c3f3c854eacd7db7143",
-				"contract_id":  "0.0.1",
+				"result":              "CONTRACT_REVERT_EXECUTED",
+				"address":             "0xd583d91742f8888f5b106c3f3c854eacd7db7143",
+				"contract_id":         "0.0.1",
 				"function_parameters": "0x" + selectorOpenSession,
 			})
 			return
@@ -246,7 +246,7 @@ func writeJSON(w http.ResponseWriter, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func padUint(v int64) string  { return fmt.Sprintf("%064x", v) }
+func padUint(v int64) string     { return fmt.Sprintf("%064x", v) }
 func padAddress(a string) string { return strings.Repeat("0", 24) + a }
 
 func mustHex(s string) []byte {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
 )
 
@@ -92,7 +91,6 @@ func (m *Model) machineCard() card {
 	}
 
 	lines = append(lines, "",
-		kv("jobs", fmt.Sprintf("%d running · %d known", m.runningJobs(), len(m.jobs))),
 		kv("docker", truncate(m.cfg.DockerHost, 40)))
 	return card{"this machine", lines}
 }
@@ -105,7 +103,6 @@ func (m *Model) sellingCard() card {
 
 	lines := []string{
 		kv("accepting", selling),
-		kv("one job", styleMoney.Render(formatHBAR(parseTinybars(m.cfg.PriceTinybars)))),
 		kv("paid into", orNone(m.cfg.PayTo)),
 		"",
 	}
@@ -113,33 +110,23 @@ func (m *Model) sellingCard() card {
 	leases := m.cfg.Leases
 	if !m.runner.LeasesEnabled() {
 		lines = append(lines,
-			kv("interactive", styleDim.Render("not offered")),
-			kv("", styleDim.Render("setup --enable-leases turns it on")))
+			kv("sessions", styleBad.Render("off — this node sells nothing")),
+			kv("", styleDim.Render("leases.enabled is false; re-run setup")))
 		return card{"what this node sells", lines}
 	}
 
-	if leases.PaymentMode == config.PaymentSession {
-		rate := leases.PriceTinybarsPerSecond
-		if rate == "" {
-			if derived, err := escrow.PricePerSecond(leases.PriceTinybarsPerMinute); err == nil {
-				rate = derived.String()
-			}
+	rate := leases.PriceTinybarsPerSecond
+	if rate == "" {
+		if derived, err := escrow.PricePerSecond(leases.PriceTinybarsPerMinute); err == nil {
+			rate = derived.String()
 		}
-		lines = append(lines,
-			kv("interactive", styleAccent.Render("metered session")+styleDim.Render(" · refundable")),
-			kv("rate", styleMoney.Render(formatHBAR(parseTinybars(rate)))+styleDim.Render(" per second")),
-			kv("chunk cap", fmt.Sprintf("%ds", leases.SessionChunkSeconds)+
-				styleDim.Render("  most one payment ever buys")),
-			kv("refunds", yesNo(leases.SelfSettle,
-				"paid automatically by this node", "must be paid by hand")))
-	} else {
-		lines = append(lines,
-			kv("interactive", "direct lease"+styleDim.Render(" · forward-paid, no refunds")),
-			kv("rate", styleMoney.Render(formatHBAR(parseTinybars(leases.PriceTinybarsPerMinute)))+
-				styleDim.Render(" per minute")),
-			kv("slice", fmt.Sprintf("%d–%d min, %d max total",
-				leases.MinMinutes, leases.MaxMinutes, leases.MaxTotalMinutes)))
 	}
+	lines = append(lines,
+		kv("interactive", styleAccent.Render("metered session")+styleDim.Render(" · refundable")),
+		kv("rate", styleMoney.Render(formatHBAR(parseTinybars(rate)))+styleDim.Render(" per second")),
+		kv("chunk cap", fmt.Sprintf("%ds", leases.SessionChunkSeconds)+
+			styleDim.Render("  most one payment ever buys")),
+		kv("refunds", styleGood.Render("paid automatically by this node")))
 	lines = append(lines, kv("gpu in lease", yesNo(m.runner.LeaseGPU(),
 		"yes", "no — the lease image has no CUDA runtime")))
 	return card{"what this node sells", lines}
@@ -154,14 +141,9 @@ func (m *Model) reachCard() card {
 		kv("registry", m.registryLine()),
 	}
 
-	if endpoints, ok := m.server.Reach(); ok {
-		mode := endpoints.Mode
-		if mode == config.TunnelQuick {
-			lines = append(lines, kv("tunnel", "quick"+
-				styleWarn.Render("  Jupyter only — a quick tunnel carries no SSH")))
-		} else {
-			lines = append(lines, kv("tunnel", "named"+styleDim.Render("  SSH and Jupyter")))
-		}
+	if _, ok := m.server.Reach(); ok {
+		lines = append(lines, kv("tunnel", "quick"+
+			styleWarn.Render("  Jupyter only — a quick tunnel carries no SSH")))
 	}
 
 	if m.cfg.Identity.AgentID != 0 {
@@ -215,20 +197,8 @@ func (m *Model) nowStrip(width, height int) string {
 		}
 	}
 
-	live := make([]string, 0, 4)
-	for _, job := range m.jobs {
-		if len(live) == 4 {
-			break
-		}
-		if !job.Status.IsTerminal() {
-			live = append(live, jobRow(job, width-4))
-		}
-	}
-	if len(live) == 0 {
-		return panel("right now", width,
-			styleDim.Render("idle — nothing is running, and this node is listening on "+m.cfg.ListenAddr))
-	}
-	return panel("right now", width, live...)
+	return panel("right now", width,
+		styleDim.Render("idle — no session is running, and this node is listening on "+m.cfg.ListenAddr))
 }
 
 func loadStyle(util int) lipgloss.Style {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { BrowserSSHKeypair } from "@cleargate/client/browser";
 import type { NodeListing, SessionCreated, SessionState } from "@cleargate/types";
 import { hashscanUrl, isSessionTerminal } from "@cleargate/types";
 
@@ -17,7 +16,7 @@ import { hbar } from "@/lib/registry";
 export type SessionView = SessionCreated & Partial<SessionState>;
 
 /**
- * What the renter bought, and how to use it — the metered twin of `LeasePanel`.
+ * What the renter bought, and how to use it.
  *
  * The number that matters here is `credit_tinybars`, not a countdown: it is
  * what the node owes back *right now* if the renter stops this instant, and it
@@ -28,7 +27,6 @@ export type SessionView = SessionCreated & Partial<SessionState>;
  */
 export function SessionPanel({
   session,
-  identity,
   node,
   busy,
   error,
@@ -36,7 +34,6 @@ export function SessionPanel({
   onStop,
 }: {
   session: SessionView;
-  identity: BrowserSSHKeypair | null;
   node: NodeListing;
   busy: string | null;
   error: string | null;
@@ -179,35 +176,12 @@ export function SessionPanel({
               </Field>
             ) : null}
 
-            {session.ssh_host !== undefined && session.ssh_host !== "" && identity !== null ? (
-              <Field label="SSH">
-                <p className="mb-2 text-xs text-muted-foreground">
-                  Download both files, then connect. This needs <code>cloudflared</code> installed
-                  locally — a browser cannot drive it.
-                </p>
-                <div className="mb-2 flex gap-2">
-                  <Download name="cleargate_session" body={identity.privateKeyPem} label="Private key" />
-                  <Download
-                    name="cleargate_session-cert.pub"
-                    body={`${session.certificate}\n`}
-                    label="Certificate"
-                  />
-                </div>
-                <pre className="overflow-x-auto bg-foreground/[0.03] p-3 font-mono text-xs">
-                  {`ssh -i cleargate_session \\
-  -o ProxyCommand="cloudflared access ssh --hostname ${session.ssh_host}" \\
-  ${session.ssh_user}@${session.ssh_host}`}
-                </pre>
-              </Field>
-            ) : (
-              <Field label="SSH">
-                <span className="text-xs text-muted-foreground">
-                  Not available: this node publishes over a tunnel that carries HTTP only, so
-                  Jupyter works and SSH does not. The certificate was still issued and scoped to
-                  this session.
-                </span>
-              </Field>
-            )}
+            <Field label="SSH">
+              <span className="text-xs text-muted-foreground">
+                Not available: every session is published through a quick tunnel, which carries HTTP
+                only — use the terminal inside Jupyter.
+              </span>
+            </Field>
           </div>
         </details>
 
@@ -230,40 +204,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /**
- * A download without a server round trip.
- *
- * The private key never leaves the browser, so writing it to a blob is the only
- * honest way to hand it over — posting it anywhere to get a download link would
- * defeat the point of generating it here.
- */
-function Download({ name, body, label }: { name: string; body: string; label: string }) {
-  const [href, setHref] = useState<string | null>(null);
-
-  useEffect(() => {
-    const url = URL.createObjectURL(new Blob([body], { type: "application/octet-stream" }));
-    setHref(url);
-    return () => URL.revokeObjectURL(url);
-  }, [body]);
-
-  if (href === null) return null;
-
-  return (
-    <Button asChild variant="outline" size="sm">
-      <a href={href} download={name}>
-        {label}
-      </a>
-    </Button>
-  );
-}
-
-/**
  * Roughly how long the current credit buys at the price the session opened at.
  *
  * Cosmetic only — the node's own meter is the authority on when a session
- * freezes, exactly as `LeasePanel`'s countdown does not drive the lease sweep.
- * This one is even more clearly a display detail than that one: the "true"
- * number is `credit_tinybars`, and this converts it into something a human
- * reads faster than a tinybar count.
+ * freezes. The "true" number is `credit_tinybars`; this converts it into
+ * something a human reads faster than a tinybar count.
  */
 function useCountdown(expiresAt: string): string {
   const [now, setNow] = useState(() => Date.now());

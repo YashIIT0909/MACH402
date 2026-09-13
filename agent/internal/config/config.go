@@ -27,9 +27,6 @@ type Config struct {
 	// PayTo is the Hedera account that receives payment.
 	PayTo string `yaml:"pay_to"`
 
-	// PriceTinybars is the flat price of one job, as a string. Never a float.
-	PriceTinybars string `yaml:"price_tinybars"`
-
 	// Asset is "0.0.0" for HBAR, or an HTS token id for token settlement.
 	Asset string `yaml:"asset"`
 
@@ -56,7 +53,7 @@ type Config struct {
 	RegistryURL string `yaml:"registry_url"`
 
 	// RegistryToken proves to the registry that this node owns its listing, so
-	// nobody else can repoint node_id at their own machine and collect jobs
+	// nobody else can repoint node_id at their own machine and collect payments
 	// meant for this one. It is a listing credential, not key material: it
 	// cannot move funds, and the node still holds no Hedera key.
 	RegistryToken string `yaml:"registry_token"`
@@ -65,15 +62,9 @@ type Config struct {
 	// nvidia container runtime is actually present, and falls back to CPU.
 	GPUEnabled bool `yaml:"gpu_enabled"`
 
-	// ImageAllowlist is the complete set of images this node will run.
-	// Arbitrary user-supplied images are out of scope (CLAUDE.md invariant 6).
-	ImageAllowlist []string `yaml:"image_allowlist"`
-
-	// Leases configures timed interactive access — an SSH shell and a Jupyter
-	// server on this machine's GPU. It is off unless a provider explicitly
-	// opted in with `setup --enable-leases`: handing a stranger a live shell is
-	// a bigger trust ask than running their sandboxed batch job, and must never
-	// be switched on as a side effect of enabling something else.
+	// Leases configures what this node sells: metered sessions on a container
+	// with a Jupyter server, on this machine's GPU. `setup` always turns it on;
+	// a node with it off runs but sells nothing.
 	Leases Leases `yaml:"leases"`
 
 	// Hedera configures the signing sidecar and the mirror node.
@@ -90,12 +81,6 @@ type Config struct {
 
 	// Identity is this provider's ERC-8004 agent registration.
 	Identity Identity `yaml:"identity"`
-
-	// Limits cap what one job may consume.
-	Limits Limits `yaml:"limits"`
-
-	// Dataset governs downloading renter-supplied dataset URLs.
-	Dataset Dataset `yaml:"dataset"`
 
 	// ReceiptsPath is the append-only local earnings log.
 	ReceiptsPath string `yaml:"receipts_path"`
@@ -192,40 +177,13 @@ type Identity struct {
 	RegistryContractID string `yaml:"registry_contract_id"`
 }
 
-// Dataset is the policy for fetching renter-supplied dataset URLs.
-//
-// The node downloads these itself, from inside the provider's own network, on
-// behalf of a paying stranger. The defaults are therefore deliberately strict:
-// https only, no private addresses, and a size cap that cannot fill a disk.
-type Dataset struct {
-	// MaxMB is the largest dataset this node will fetch, enforced both against
-	// the advertised Content-Length and by counting bytes as they arrive.
-	MaxMB int `yaml:"max_mb"`
-
-	// TimeoutSeconds bounds a whole download.
-	TimeoutSeconds int `yaml:"timeout_seconds"`
-
-	// AllowHTTP permits plaintext http:// URLs. A dataset fetched in the clear
-	// can be replaced in transit, so this is off unless an operator opts in.
-	AllowHTTP bool `yaml:"allow_http"`
-
-	// AllowPrivate permits private, loopback and link-local addresses. Off by
-	// default: leaving it on would let any renter use this node as a proxy into
-	// the provider's LAN and cloud metadata service.
-	AllowPrivate bool `yaml:"allow_private"`
-
-	// HostAllowlist, when non-empty, restricts datasets to these exact hosts.
-	HostAllowlist []string `yaml:"host_allowlist"`
-}
-
 // Leases is the policy for timed interactive access to this machine.
 //
-// A lease is the opposite trade-off from a job: the renter's code never leaves
-// their machine, and instead they get a shell on the provider's. That means the
-// containment story has to be stronger, not weaker — see Egress below and
+// The renter's code never leaves their machine; instead they get a shell on the
+// provider's. That means the containment story has to be strong — see Egress below and
 // runner.leaseContainerRequest.
 type Leases struct {
-	// Enabled gates the whole feature, including the /v1/leases routes. A node
+	// Enabled gates the whole feature, including the /v1/sessions routes. A node
 	// with this false answers 404 there and behaves exactly as it did before
 	// leasing existed.
 	Enabled bool `yaml:"enabled"`
@@ -240,41 +198,15 @@ type Leases struct {
 	// handler uses math/big.
 	PriceTinybarsPerMinute string `yaml:"price_tinybars_per_minute"`
 
-	// MinMinutes and MaxMinutes bound one purchased slice. A slice that is too
-	// short spends more on settlement than on compute; one that is too long
-	// pins the node's only lease slot for someone who may have walked away.
+	// MinMinutes and MaxMinutes bound how long a session may ask for. Too short
+	// spends more on settlement than on compute; too long pins the node's only
+	// lease slot for someone who may have walked away.
 	MinMinutes int `yaml:"min_minutes"`
 	MaxMinutes int `yaml:"max_minutes"`
 
-	// MaxTotalMinutes caps a lease's whole life across extensions, so a node is
+	// MaxTotalMinutes caps a session's whole life across top-ups, so a node is
 	// never leased out indefinitely by a renter who keeps topping it up.
 	MaxTotalMinutes int `yaml:"max_total_minutes"`
-
-	// MissedExtensions is retained so configs written before OverrunSeconds
-	// existed still load. It no longer decides anything.
-	//
-	// It used to set the freeze tolerance to missed_extensions x the slice the
-	// renter bought, which with the shipped default of 2 meant a 60-minute
-	// lease kept the machine for 180 minutes before it was even frozen, and 190
-	// before the container died. That is three times the time sold, given away,
-	// and it read to a provider as the node ignoring its own expiry. See
-	// OverrunSeconds.
-	MissedExtensions int `yaml:"missed_extensions"`
-
-	// OverrunSeconds is how far past expires_at a lease keeps running before it
-	// is frozen.
-	//
-	// Small on purpose. Minutes bought should be minutes delivered: a renter who
-	// buys fifteen gets fifteen, and the provider's machine comes back. The
-	// tolerance exists only to absorb an extension that is paid for but not yet
-	// applied — a wallet prompt the renter is mid-way through approving — not to
-	// hand out free time.
-	//
-	// Freezing rather than killing is still deliberate, and unchanged: the
-	// container is paused, not destroyed, so a renter mid-task who is slow to
-	// pay gets their work back when they extend. GraceMinutes is how long that
-	// frozen state survives before the machine is reclaimed for good.
-	OverrunSeconds int `yaml:"overrun_seconds"`
 
 	// GraceMinutes is how long a frozen lease survives before it is reaped —
 	// container killed, tunnel ingress withdrawn, workspace wiped.
@@ -295,16 +227,13 @@ type Leases struct {
 	// NAT.
 	Tunnel Tunnel `yaml:"tunnel"`
 
-	// PaymentMode selects how interactive time is paid for.
+	// PaymentMode is how interactive time is paid for, and it has one value:
+	// "session", which buys a credit over x402 and meters it down second by
+	// second, refunding whatever is left when the session ends.
 	//
-	// "direct" is the original flow: a forward transfer per slice through the
-	// facilitator, no refunds, which is what every existing node does.
-	// "session" buys a credit the same x402 way and then meters it down second
-	// by second, refunding whatever is left when the session ends.
-	//
-	// Added behind a flag rather than replacing direct, per the project's rule
-	// about preferring a config flag over changing working behaviour: every
-	// tagged milestone has to stay demoable, and `make smoke` exercises direct.
+	// "direct" — forward payment per slice, no refunds — was removed. A config
+	// still naming it is refused at load with a way forward, rather than
+	// quietly switched to a mode that holds a renter's money differently.
 	//
 	// "escrow" is accepted as the old spelling of "session" and normalizes to
 	// it at load. It named a genuinely different mechanism — a deposit into
@@ -340,24 +269,10 @@ type Leases struct {
 	// lives on the node that knows its own sweep interval rather than being
 	// guessed at by every client.
 	LowCreditThresholdSeconds int `yaml:"low_credit_threshold_seconds"`
-
-	// SelfSettle lets the node transfer a session's unburned remainder back to
-	// its renter itself, through the sidecar, when the session ends.
-	//
-	// Off by default, and with a real cost when it is on: refunds are paid from
-	// the node's operator account, so that account has to hold more than the
-	// fee float a node needs for HCS and registration — enough to cover an
-	// outstanding chunk. Earnings still land in pay_to, which signs nothing, so
-	// a compromise of the operator key still cannot touch them.
-	//
-	// With it off, the node publishes what it owes to its audit topic and logs
-	// it, and the refund is a thing the provider settles by hand.
-	SelfSettle bool `yaml:"self_settle"`
 }
 
 // Lease payment modes. See Leases.PaymentMode.
 const (
-	PaymentDirect  = "direct"
 	PaymentSession = "session"
 
 	// PaymentEscrow is the old spelling of PaymentSession, normalized at load
@@ -365,9 +280,8 @@ const (
 	PaymentEscrow = "escrow"
 )
 
-// LeaseLimits caps one lease container. Separate from job Limits because an
-// interactive session is sized for a person working, not for one batch script:
-// more memory, no wall-clock kill (the lease's paid expiry is the clock).
+// LeaseLimits caps one lease container. It is sized for a person working, and
+// has no wall-clock kill: the session's credit is the clock.
 type LeaseLimits struct {
 	MemoryMB    int64 `yaml:"memory_mb"`
 	CPUCores    int   `yaml:"cpu_cores"`
@@ -377,9 +291,8 @@ type LeaseLimits struct {
 
 // Egress is the lease container's network policy.
 //
-// Batch jobs get no network at all. A lease cannot work that way — a renter has
-// to be able to `pip install` — so instead of loosening to the job flow's
-// blocklist, lease containers sit on an internal Docker network with no route
+// A renter has to be able to `pip install`, so a container with no network at
+// all is not an option. Instead lease containers sit on an internal Docker network with no route
 // out and reach the world only through a ClearGate-built proxy that denies by
 // default. A renter with a live shell can unset HTTP_PROXY, but there is
 // nothing behind it: the network itself has no path off the host.
@@ -397,84 +310,31 @@ type Egress struct {
 // Tunnel is how renters reach a lease container on a machine that has no public
 // address — the normal case for a provider behind a home router.
 type Tunnel struct {
-	// Mode is "named", "quick" or "off".
-	//
-	//	named  a Cloudflare named tunnel, provisioned for this node by the
-	//	       registry using the platform's Cloudflare account. SSH and Jupyter
-	//	       both work, on stable hostnames.
-	//	quick  `cloudflared tunnel --url`, which needs no Cloudflare account at
-	//	       all but gives an HTTP-only, random, per-lease hostname. Jupyter
-	//	       works; SSH does not.
-	//	off    no tunnel. Only useful when the node already has a public address
-	//	       or is being tested on a LAN.
+	// Mode is "quick", the only mode: `cloudflared tunnel --url`, which needs no
+	// Cloudflare account and gives an HTTP-only, random, per-lease hostname.
+	// Jupyter works; SSH does not. "named" (registry-provisioned) and "off" (no
+	// tunnel) were removed, and a config still naming either is refused.
 	Mode string `yaml:"mode"`
 
 	// Binary is the cloudflared executable. Looked up on PATH by default.
 	Binary string `yaml:"binary"`
-
-	// Token is the named tunnel's credential, fetched once from the registry
-	// and cached here. It authorizes running one tunnel and nothing else — it
-	// is not a Cloudflare API key, and it cannot move funds.
-	Token string `yaml:"token"`
-
-	// SSHHostname, JupyterHostname and APIHostname are what the registry
-	// created DNS routes for. Empty until the first successful token fetch.
-	SSHHostname     string `yaml:"ssh_hostname"`
-	JupyterHostname string `yaml:"jupyter_hostname"`
-	APIHostname     string `yaml:"api_hostname"`
-
-	// DerivePublicURL replaces a provider-supplied public_url with the tunnel's
-	// own API hostname. A provider who cannot be reached for SSH without a
-	// tunnel usually cannot be reached for the x402 API either, so this exists
-	// — but it is off by default, because it silently overrides something the
-	// provider typed in (implementation.md §8.5).
-	DerivePublicURL bool `yaml:"derive_public_url"`
-
-	// ConfigDir holds the generated cloudflared config and the node's tunnel
-	// state. Defaults to a directory beside config.yaml.
-	ConfigDir string `yaml:"config_dir"`
 }
 
-// Limits are the per-job resource caps enforced by the runner.
-type Limits struct {
-	MaxSeconds    int   `yaml:"max_seconds"`
-	MemoryMB      int64 `yaml:"memory_mb"`
-	CPUCores      int   `yaml:"cpu_cores"`
-	MaxArtifactMB int64 `yaml:"max_artifact_mb"`
-	PidsLimit     int64 `yaml:"pids_limit"`
-}
-
-// Default returns a config that runs safely out of the box: CPU mode, a short
-// allowlist, and conservative caps.
+// Default returns a config that runs safely out of the box: CPU mode and
+// conservative caps.
 func Default() Config {
 	return Config{
-		PriceTinybars:     "100000", // 0.001 HBAR
 		Asset:             "0.0.0",
 		Network:           "hedera:testnet",
 		FacilitatorURL:    "https://api.testnet.blocky402.com",
 		MaxTimeoutSeconds: 300,
 		ListenAddr:        "0.0.0.0:8402",
 		GPUEnabled:        false,
-		ImageAllowlist: []string{
-			"python:3.11-slim",
-			"pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
-		},
-		Dataset: Dataset{
-			MaxMB:          8192,
-			TimeoutSeconds: 1800,
-		},
-		Leases: DefaultLeases(),
-		Hedera: DefaultHedera(),
-		Limits: Limits{
-			MaxSeconds:    900,
-			MemoryMB:      4096,
-			CPUCores:      2,
-			MaxArtifactMB: 512,
-			PidsLimit:     512,
-		},
-		ReceiptsPath: "receipts.jsonl",
-		DockerHost:   "unix:///var/run/docker.sock",
-		CORS:         DefaultCORS(),
+		Leases:            DefaultLeases(),
+		Hedera:            DefaultHedera(),
+		ReceiptsPath:      "receipts.jsonl",
+		DockerHost:        "unix:///var/run/docker.sock",
+		CORS:              DefaultCORS(),
 	}
 }
 
@@ -505,8 +365,6 @@ func DefaultLeases() Leases {
 		MinMinutes:             5,
 		MaxMinutes:             120,
 		MaxTotalMinutes:        1440, // one day
-		MissedExtensions:       2,
-		OverrunSeconds:         30,
 		GraceMinutes:           10,
 		CAKeyPath:              "lease-ca",
 		Limits: LeaseLimits{
@@ -538,9 +396,9 @@ func DefaultLeases() Leases {
 			Mode:   TunnelQuick,
 			Binary: "cloudflared",
 		},
-		// Direct, not session: metered sessions need a funded operator key to
-		// pay refunds from, which a node does not have until someone opts in.
-		PaymentMode: PaymentDirect,
+		// The only mode there is. Leasing itself stays off by default, and
+		// turning it on is what brings the operator key refunds are paid from.
+		PaymentMode: PaymentSession,
 
 		// Five minutes. Long enough that a renter is not paying every few
 		// seconds, short enough that the money a provider is holding ahead of
@@ -569,12 +427,8 @@ func DefaultHedera() Hedera {
 // DefaultMirrorURL is Hedera's public testnet mirror node.
 const DefaultMirrorURL = "https://testnet.mirrornode.hedera.com"
 
-// Tunnel modes. See Tunnel.Mode.
-const (
-	TunnelNamed = "named"
-	TunnelQuick = "quick"
-	TunnelOff   = "off"
-)
+// TunnelQuick is the only tunnel mode. See Tunnel.Mode.
+const TunnelQuick = "quick"
 
 // Load reads a config file and applies defaults for anything left unset.
 func Load(path string) (Config, error) {
@@ -589,14 +443,6 @@ func Load(path string) (Config, error) {
 	cfg := Default()
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	// A config written before dataset support existed has a zeroed block; treat
-	// that as "unset" rather than "no downloads allowed and no timeout".
-	if cfg.Dataset.MaxMB <= 0 {
-		cfg.Dataset.MaxMB = Default().Dataset.MaxMB
-	}
-	if cfg.Dataset.TimeoutSeconds <= 0 {
-		cfg.Dataset.TimeoutSeconds = Default().Dataset.TimeoutSeconds
 	}
 	cfg.Leases.applyDefaults(filepath.Dir(path))
 	cfg.Hedera.applyDefaults(filepath.Dir(path))
@@ -632,15 +478,6 @@ func (l *Leases) applyDefaults(configDir string) {
 	if l.MaxTotalMinutes <= 0 {
 		l.MaxTotalMinutes = fallback.MaxTotalMinutes
 	}
-	if l.MissedExtensions <= 0 {
-		l.MissedExtensions = fallback.MissedExtensions
-	}
-	// A config written before this existed has it at zero, which would freeze a
-	// renter the instant their clock ran out with no room for an in-flight
-	// extension. Treat absent as unset, not as "no tolerance at all".
-	if l.OverrunSeconds <= 0 {
-		l.OverrunSeconds = fallback.OverrunSeconds
-	}
 	if l.GraceMinutes <= 0 {
 		l.GraceMinutes = fallback.GraceMinutes
 	}
@@ -671,9 +508,6 @@ func (l *Leases) applyDefaults(configDir string) {
 	if l.Tunnel.Binary == "" {
 		l.Tunnel.Binary = fallback.Tunnel.Binary
 	}
-	if l.Tunnel.ConfigDir == "" {
-		l.Tunnel.ConfigDir = "cloudflared"
-	}
 	if l.PaymentMode == "" {
 		l.PaymentMode = fallback.PaymentMode
 	}
@@ -695,7 +529,6 @@ func (l *Leases) applyDefaults(configDir string) {
 		configDir = "."
 	}
 	l.CAKeyPath = resolveAgainst(configDir, l.CAKeyPath)
-	l.Tunnel.ConfigDir = resolveAgainst(configDir, l.Tunnel.ConfigDir)
 }
 
 // applyDefaults fills in a `hedera:` block that an older config never had, and
@@ -780,9 +613,6 @@ func (c Config) validateBase() error {
 	if !isHederaAccountID(c.PayTo) {
 		return fmt.Errorf("pay_to %q is not a Hedera account id like 0.0.1234", c.PayTo)
 	}
-	if _, err := strconv.ParseUint(c.PriceTinybars, 10, 64); err != nil {
-		return fmt.Errorf("price_tinybars %q must be a whole number of tinybars, as a string", c.PriceTinybars)
-	}
 	if c.Asset == "" {
 		return errors.New("asset must be \"0.0.0\" for HBAR or an HTS token id")
 	}
@@ -795,9 +625,6 @@ func (c Config) validateBase() error {
 	if c.MaxTimeoutSeconds <= 0 {
 		return errors.New("max_timeout_seconds must be positive")
 	}
-	if len(c.ImageAllowlist) == 0 {
-		return errors.New("image_allowlist is empty — the node would refuse every job")
-	}
 	if c.RegistryURL != "" {
 		// A listing renters cannot dial is worse than no listing at all: the
 		// registry has nowhere to send them, so refuse to publish one.
@@ -807,9 +634,6 @@ func (c Config) validateBase() error {
 		if c.RegistryToken == "" {
 			return errors.New("registry_token must be set when registry_url is — re-run `cleargate-node setup` to generate one")
 		}
-	}
-	if c.Limits.MaxSeconds <= 0 || c.Limits.MemoryMB <= 0 || c.Limits.CPUCores <= 0 {
-		return errors.New("limits.max_seconds, limits.memory_mb and limits.cpu_cores must all be positive")
 	}
 	if err := c.Leases.validate(); err != nil {
 		return err
@@ -825,9 +649,9 @@ func (c Config) validateBase() error {
 	// publishing that is a sidecar call. A session node with no key would be
 	// asking renters to prepay against nothing but a promise, so this is
 	// refused at startup rather than discovered by a renter.
-	if c.Leases.Enabled && c.Leases.PaymentMode == PaymentSession && !c.Hedera.Enabled {
-		return errors.New("leases.payment_mode is session, which needs hedera.enabled so the node can publish " +
-			"its refund-owed trail — re-run `cleargate-node setup --enable-sessions`")
+	if c.Leases.Enabled && (!c.Hedera.Enabled || !c.HCS.Enabled) {
+		return errors.New("leases.enabled needs hedera.enabled and hcs.enabled, so the node can publish its " +
+			"refund-owed trail and pay refunds — re-run `cleargate-node setup --enable-leases`")
 	}
 	return nil
 }
@@ -849,28 +673,37 @@ func (l Leases) validate() error {
 		return errors.New("leases.min_minutes must be positive and no larger than leases.max_minutes")
 	}
 	if l.MaxTotalMinutes < l.MaxMinutes {
-		return errors.New("leases.max_total_minutes must be at least leases.max_minutes, or the first slice could not be bought")
+		return errors.New("leases.max_total_minutes must be at least leases.max_minutes, or no session could reach its own maximum")
 	}
 	if l.CAKeyPath == "" {
 		return errors.New("leases.ca_key_path must be set — it is where this node's SSH certificate authority lives")
 	}
 	switch l.Tunnel.Mode {
-	case TunnelNamed, TunnelQuick, TunnelOff:
+	case TunnelQuick:
+	case "named", "off":
+		// Removed, not renamed. Said plainly so a config written when either
+		// existed fails with a way forward rather than a bare "invalid value".
+		return fmt.Errorf("leases.tunnel.mode %q has been removed — leases are published only through a "+
+			"Cloudflare quick tunnel; set leases.tunnel.mode to %q", l.Tunnel.Mode, TunnelQuick)
 	default:
-		return fmt.Errorf("leases.tunnel.mode %q must be one of %q, %q or %q",
-			l.Tunnel.Mode, TunnelNamed, TunnelQuick, TunnelOff)
+		return fmt.Errorf("leases.tunnel.mode %q must be %q", l.Tunnel.Mode, TunnelQuick)
 	}
 	if l.Egress.ProxyImage == "" {
 		return errors.New("leases.egress.proxy_image must be set — lease containers reach the network only through it")
 	}
 	switch l.PaymentMode {
-	case PaymentDirect:
+	case "direct":
+		// Removed, not renamed. Said plainly so a node configured before the
+		// change fails with a way forward rather than a bare "invalid value".
+		return fmt.Errorf("leases.payment_mode %q has been removed — interactive time is sold only as metered "+
+			"sessions that refund unused credit; set leases.payment_mode to %q and re-run "+
+			"`cleargate-node setup --enable-leases` so the node has a key to publish and pay refunds with",
+			l.PaymentMode, PaymentSession)
 	case PaymentSession:
-		// A chunk longer than one slice would sell more time in one payment
-		// than the node offers in one lease, which is exactly the exposure
-		// chunking exists to bound.
-		// The chunk is also what the container is provisioned for, so it has to
-		// sit inside the same bounds a lease slice does.
+		// A chunk longer than a session may run would sell more time in one
+		// payment than the node offers at all, which is exactly the exposure
+		// chunking exists to bound. The chunk is also what the container is
+		// provisioned for, so it has to sit inside the same bounds.
 		if l.SessionChunkSeconds < l.MinMinutes*60 {
 			return fmt.Errorf("leases.session_chunk_seconds (%d) must be at least leases.min_minutes (%d minutes)",
 				l.SessionChunkSeconds, l.MinMinutes)
@@ -885,7 +718,7 @@ func (l Leases) validate() error {
 				l.LowCreditThresholdSeconds, l.SessionChunkSeconds)
 		}
 	default:
-		return fmt.Errorf("leases.payment_mode %q must be %q or %q", l.PaymentMode, PaymentDirect, PaymentSession)
+		return fmt.Errorf("leases.payment_mode %q must be %q", l.PaymentMode, PaymentSession)
 	}
 	if l.PriceTinybarsPerSecond != "" {
 		if _, err := strconv.ParseUint(l.PriceTinybarsPerSecond, 10, 64); err != nil {
@@ -927,17 +760,6 @@ func (i Identity) validate() error {
 		return errors.New("identity.agent_id is set but identity.registry_contract_id is not; an agent id is meaningless without the registry that issued it")
 	}
 	return nil
-}
-
-// AllowsImage reports whether the node is willing to run an image. The match is
-// exact: no prefixes, no wildcards, no "latest" resolution.
-func (c Config) AllowsImage(image string) bool {
-	for _, allowed := range c.ImageAllowlist {
-		if allowed == image {
-			return true
-		}
-	}
-	return false
 }
 
 // isHederaAccountID checks the shard.realm.num shape without pulling in a
