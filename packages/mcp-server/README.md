@@ -82,7 +82,7 @@ override to just this one subprocess.)
   "mcpServers": {
     "mach402": {
       "command": "npx",
-      "args": ["-y", "@mach402/mcp-server"],
+      "args": ["-y", "mach402-mcp-server"],
       "env": {
         "HEDERA_ACCOUNT_ID": "0.0.xxxxxxx",
         "HEDERA_PRIVATE_KEY": "...",

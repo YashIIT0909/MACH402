@@ -6,3 +6,12 @@ packages:
   - "hederakit"
   - "registry"
   - "web"
+
+# pnpm 10 reads this here, not from package.json's "pnpm" field. Without it the
+# build scripts of these four are skipped silently, and the Hedera SDK the
+# signing sidecar links needs keccak and secp256k1 built to work at all.
+onlyBuiltDependencies:
+  - esbuild
+  - keccak
+  - protobufjs
+  - secp256k1

@@ -94,7 +94,7 @@ dev-web: ## run the website on :3000
 	pnpm --filter @cleargate/web run dev
 
 mcp-server: ## run the agent-facing MCP server over stdio (standalone package — see packages/mcp-server)
-	pnpm --filter @mach402/mcp-server run start
+	pnpm --filter mach402-mcp-server run start
 
 contracts: ## compile the Solidity contracts
 	pnpm --filter @cleargate/contracts run build
