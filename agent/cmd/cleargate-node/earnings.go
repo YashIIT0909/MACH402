@@ -40,7 +40,7 @@ func showEarnings(log *receipts.Log) error {
 
 	// Sum in big.Int: HBAR amounts are never handled as floating point.
 	total := new(big.Int)
-	fmt.Printf("%-18s  %-12s  %-14s  %s\n", "SETTLED", "JOB", "TINYBARS", "TRANSACTION")
+	fmt.Printf("%-18s  %-12s  %-14s  %s\n", "SETTLED", "LEASE", "TINYBARS", "TRANSACTION")
 	for _, receipt := range all {
 		amount, ok := new(big.Int).SetString(receipt.AmountTinybars, 10)
 		if ok {

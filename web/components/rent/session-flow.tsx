@@ -7,7 +7,6 @@ import {
   createWalletPayer,
   generateSSHKeypair,
   payFor,
-  type BrowserSSHKeypair,
   type SubtleCryptoLike,
 } from "@cleargate/client/browser";
 
@@ -15,19 +14,19 @@ import { Button } from "@/components/ui/button";
 import { useWallet } from "@/components/wallet/wallet-provider";
 import { hbar } from "@/lib/registry";
 import { ConnectWallet } from "./connect-wallet";
-import { MinutesPicker } from "./lease-flow";
+import { MinutesPicker } from "./minutes-picker";
 import { SessionPanel, type SessionView } from "./session-panel";
 import { describe } from "./describe-error";
 
 /**
- * Buying interactive time on a node that meters it, from the browser.
+ * Buying interactive time from the browser — the only way it is sold.
  *
- * Mechanically this is `LeaseFlow`: the same x402 cycle, the same
- * validate-then-402-then-provision-then-settle order on the node. What is
- * different is what a payment buys and therefore what happens after. A lease
- * payment buys minutes that are gone whether used or not; a session payment
- * buys a *credit* the node burns down by the second, refunding the remainder
- * when the session ends. It is bought in a bounded first chunk
+ * The order here is the node's order, not a UI convenience: the node validates
+ * the spec, answers 402, verifies, starts the container, signs the certificate,
+ * points the tunnel, *proves it is reachable*, and only then settles. A renter
+ * is never charged for a session that never came up. What a payment buys is a
+ * *credit* the node burns down by the second, refunding the remainder when the
+ * session ends. It is bought in a bounded first chunk
  * (`offer.chunk_seconds`) and topped up automatically as that credit runs low
  * — this component fires those top-ups itself, which means the wallet may
  * prompt again while a session is open. That is expected, not a bug.
@@ -61,7 +60,6 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
-  const [identity, setIdentity] = useState<BrowserSSHKeypair | null>(null);
 
   // Guards the auto-top-up effect against firing twice for the same low-credit
   // moment while the first payment is still in flight — the poll that notices
@@ -89,7 +87,6 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
       const keypair = await generateSSHKeypair(
         window.crypto.subtle as unknown as SubtleCryptoLike,
       );
-      setIdentity(keypair);
 
       setBusy("Checking the node answers…");
       try {
@@ -176,9 +173,9 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
    *
    * `low_credits` is computed by the node against its own threshold — which has
    * to clear its 15-second sweep interval plus a payment round trip — rather
-   * than guessed at here. This is the CLI's `holdSession` loop, moved into the
-   * browser: the wallet may prompt again mid-session, and that is the price of
-   * not making a renter babysit a tab to avoid being frozen mid-run.
+   * than guessed at here. The loop runs in the browser, so the wallet may prompt
+   * again mid-session, and that is the price of not making a renter babysit a
+   * tab to avoid being frozen mid-run.
    */
   useEffect(() => {
     if (session === null || session.token === undefined) return;
@@ -224,7 +221,6 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
     return (
       <SessionPanel
         session={session}
-        identity={identity}
         node={node}
         busy={busy}
         error={error}
@@ -269,7 +265,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
             {hasChoice ? ` (top-ups after this buy the full ${chunkSeconds}s chunk)` : ""}
           </p>
           <p className="mt-3 text-xs text-muted-foreground">
-            Metered, not forward-paid: the node burns this credit by the second and{" "}
+            Metered: the node burns this credit by the second and{" "}
             <strong className="text-foreground">refunds what you do not use</strong>. It tops up
             automatically as it runs low — this is the most of your money the node ever holds ahead
             of the compute it pays for.
@@ -316,7 +312,7 @@ export function SessionFlow({ node, offer }: { node: NodeListing; offer: LeaseOf
         ) : (
           <p className="text-xs text-destructive">
             This node reports no audit topic. Nothing but its word says what it owes you if you
-            stop early — consider a forward-paid lease instead if that matters to you.
+            stop early — consider another node if that matters to you.
           </p>
         )}
 

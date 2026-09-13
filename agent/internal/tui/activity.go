@@ -7,8 +7,8 @@ import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 )
 
-// activityView is the node's running commentary: every payment, every job
-// transition, every lease opening and closing, in order.
+// activityView is the node's running commentary: every payment, every lease
+// opening and closing, in order.
 //
 // It gets a whole screen because the old five-line feed could not hold one
 // settlement plus the burn checkpoints a metered session publishes every
@@ -76,15 +76,9 @@ func matchesFilter(kind runner.EventKind, filter feedFilter) bool {
 			runner.EventSettled, runner.EventSettleFailed, runner.EventSessionBurn:
 			return true
 		}
-	case filterJobs:
-		switch kind {
-		case runner.EventJobStaging, runner.EventJobStarted,
-			runner.EventJobFinished, runner.EventJobReaped:
-			return true
-		}
 	case filterLeases:
 		switch kind {
-		case runner.EventLeaseStarted, runner.EventLeaseExtended,
+		case runner.EventLeaseStarted,
 			runner.EventLeasePaused, runner.EventLeaseEnded, runner.EventSessionBurn:
 			return true
 		}
@@ -114,23 +108,11 @@ func renderEvent(event runner.Event) string {
 		return fmt.Sprintf("%s %s %s", stamp, styleBad.Render("payment rejected"), event.Detail)
 	case runner.EventChallenged:
 		return fmt.Sprintf("%s %s %s", stamp, styleDim.Render("402 challenge"), event.Detail)
-	case runner.EventJobStaging:
-		return fmt.Sprintf("%s %s %s  %s", stamp, styleRunning.Render("staging"), short(event.JobID), event.Detail)
-	case runner.EventJobStarted:
-		return fmt.Sprintf("%s %s %s  %s", stamp, styleRunning.Render("started"), short(event.JobID), event.Detail)
-	case runner.EventJobFinished:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			statusStyle(event.Status).Render(string(event.Status)), short(event.JobID), event.Detail)
-	case runner.EventJobReaped:
-		return fmt.Sprintf("%s %s %s", stamp, styleDim.Render("reaped"), short(event.JobID))
 	// A provider should be able to watch a stranger's shell open on their
 	// machine and close again, in the same feed as the money.
 	case runner.EventLeaseStarted:
 		return fmt.Sprintf("%s %s %s  %s", stamp,
 			styleRunning.Render("lease open"), short(event.LeaseID), event.Detail)
-	case runner.EventLeaseExtended:
-		return fmt.Sprintf("%s %s %s  %s", stamp,
-			styleGood.Render("lease extended"), short(event.LeaseID), event.Detail)
 	case runner.EventLeasePaused:
 		return fmt.Sprintf("%s %s %s  %s", stamp,
 			styleWarn.Render("lease frozen"), short(event.LeaseID), event.Detail)
@@ -160,7 +142,7 @@ func (m *Model) nodeView(width, height int) string {
 
 	var b strings.Builder
 	b.WriteString(cardRow(body, m.moneyCard(), m.keysCard()))
-	b.WriteString(cardRow(body, m.sandboxCard(), m.datasetCard()))
+	b.WriteString(cardRow(body, m.sandboxCard(), m.originsCard()))
 	return indent(b.String())
 }
 
@@ -197,7 +179,7 @@ func (m *Model) keysCard() card {
 	lines = append(lines,
 		kv("operator", orNone(m.cfg.Hedera.OperatorAccountID)),
 		kv("it signs", styleDim.Render("topic writes, ERC-8004 registration")))
-	if m.cfg.Leases.SelfSettle {
+	if m.cfg.Leases.Enabled {
 		lines = append(lines, kv("", styleDim.Render("and session refunds — so it holds a float")))
 	}
 	lines = append(lines,
@@ -222,45 +204,23 @@ func (m *Model) keysCard() card {
 }
 
 func (m *Model) sandboxCard() card {
-	limits := m.cfg.Limits
-	lines := []string{
-		kv("network", styleGood.Render("none")+
-			styleDim.Render("  a job container has no route out")),
-		kv("wall clock", fmt.Sprintf("%ds", limits.MaxSeconds)),
-		kv("memory", fmt.Sprintf("%d MB", limits.MemoryMB)),
-		kv("cpu", fmt.Sprintf("%d core(s)", limits.CPUCores)),
-		kv("artifact", fmt.Sprintf("%d MB max", limits.MaxArtifactMB)),
-		"",
-		styleDim.Render("images this node will run:"),
-	}
-	for _, image := range m.cfg.ImageAllowlist {
-		lines = append(lines, "  "+truncate(image, 44))
-	}
-	if len(m.cfg.ImageAllowlist) == 0 {
-		lines = append(lines, styleBad.Render("  none — every job will be refused"))
-	}
-	return card{"job sandbox", lines}
+	leases := m.cfg.Leases
+	return card{"session sandbox", []string{
+		kv("network", styleGood.Render("internal")+
+			styleDim.Render("  out only through the egress proxy")),
+		kv("egress", fmt.Sprintf("%d allowlisted host(s)", len(leases.Egress.Allowlist))+
+			styleDim.Render("  listed on Leasing")),
+		kv("memory", fmt.Sprintf("%d MB", leases.Limits.MemoryMB)),
+		kv("cpu", fmt.Sprintf("%d core(s)", leases.Limits.CPUCores)),
+		kv("workspace", fmt.Sprintf("%d GB", leases.Limits.WorkspaceGB)+
+			styleDim.Render("  wiped when the session is reaped")),
+		kv("image", truncate(leases.Image, 40)),
+	}}
 }
 
-func (m *Model) datasetCard() card {
-	dataset := m.cfg.Dataset
-	hosts := "any public host"
-	if len(dataset.HostAllowlist) > 0 {
-		hosts = strings.Join(dataset.HostAllowlist, ", ")
-	}
-
-	return card{"datasets and origins", []string{
-		styleDim.Render("this node downloads a stranger's URL from inside"),
-		styleDim.Render("your network, so the defaults are strict."),
-		"",
-		kv("size cap", fmt.Sprintf("%d MB", dataset.MaxMB)),
-		kv("timeout", fmt.Sprintf("%ds", dataset.TimeoutSeconds)),
-		kv("plain http", yesNo(!dataset.AllowHTTP, "refused", "ALLOWED")),
-		kv("private ips", yesNo(!dataset.AllowPrivate,
-			"blocked, every redirect hop", "ALLOWED — your LAN is reachable")),
-		kv("hosts", truncate(hosts, 34)),
-		"",
-		kv("browser", truncate(strings.Join(m.cfg.CORS.AllowedOrigins, ", "), 34)),
+func (m *Model) originsCard() card {
+	return card{"browser origins", []string{
+		kv("allowed", truncate(strings.Join(m.cfg.CORS.AllowedOrigins, ", "), 34)),
 		kv("", styleDim.Render("no cookies are ever accepted, so a wide")),
 		kv("", styleDim.Render("origin list grants a page nothing extra.")),
 	}}

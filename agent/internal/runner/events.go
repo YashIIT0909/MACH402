@@ -16,19 +16,12 @@ const (
 	EventSettled      EventKind = "settled"
 	EventSettleFailed EventKind = "settle_failed"
 
-	// Job events, emitted by the runner.
-	EventJobStaging  EventKind = "job_staging"
-	EventJobStarted  EventKind = "job_started"
-	EventJobFinished EventKind = "job_finished"
-	EventJobReaped   EventKind = "job_reaped"
-
 	// Lease events. A provider watching the dashboard should be able to see
 	// exactly when a stranger's shell opened on their machine and when it went
 	// away again, so every transition is reported.
-	EventLeaseStarted  EventKind = "lease_started"
-	EventLeaseExtended EventKind = "lease_extended"
-	EventLeasePaused   EventKind = "lease_paused"
-	EventLeaseEnded    EventKind = "lease_ended"
+	EventLeaseStarted EventKind = "lease_started"
+	EventLeasePaused  EventKind = "lease_paused"
+	EventLeaseEnded   EventKind = "lease_ended"
 
 	// EventSessionBurn fires on every meter tick of a live metered session —
 	// the same fact that gets published to the provider's HCS audit topic,
@@ -46,9 +39,7 @@ const (
 type Event struct {
 	At          time.Time
 	Kind        EventKind
-	JobID       string
 	LeaseID     string
-	Status      Status
 	Detail      string
 	Payer       string
 	Transaction string
@@ -57,7 +48,7 @@ type Event struct {
 
 // eventBroker fans events out to subscribers without ever blocking the
 // publisher — the same discipline as logBroker, for the same reason: a slow or
-// wedged dashboard must not stall a paid job or a settlement.
+// wedged dashboard must not stall a meter tick or a settlement.
 type eventBroker struct {
 	mu          sync.Mutex
 	recent      []Event
@@ -122,19 +113,3 @@ func (r *Runner) Subscribe() ([]Event, chan Event) { return r.events.subscribe()
 
 // Unsubscribe releases an event subscription.
 func (r *Runner) Unsubscribe(ch chan Event) { r.events.unsubscribe(ch) }
-
-// List snapshots every job the node knows about, newest first.
-func (r *Runner) List() []State {
-	r.mu.RLock()
-	jobs := make([]*Job, 0, len(r.jobs))
-	for _, job := range r.jobs {
-		jobs = append(jobs, job)
-	}
-	r.mu.RUnlock()
-
-	states := make([]State, 0, len(jobs))
-	for _, job := range jobs {
-		states = append(states, job.State())
-	}
-	return states
-}

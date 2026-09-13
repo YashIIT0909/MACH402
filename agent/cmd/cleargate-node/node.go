@@ -20,7 +20,7 @@ import (
 // This exists because they diverged once and it was not visible. `tui` built
 // its own server without the leasing wiring, so a provider who had opted into
 // leases, built the image and configured a price watched their dashboard report
-// a healthy node while every `POST /v1/leases` answered
+// a healthy node while every `POST /v1/sessions` answered
 // "this node does not offer interactive leases", and nothing froze or reaped a
 // lease either because the sweep was never started.
 //
@@ -65,8 +65,8 @@ func buildNode(ctx context.Context, configPath string, log *slog.Logger) (*node,
 
 	fac := x402.NewFacilitator(cfg.FacilitatorURL, 30*time.Second)
 
-	// Fail fast if the facilitator cannot price a job: a node that cannot build
-	// a challenge cannot be paid, and it is better to know at startup.
+	// Fail fast if the facilitator is unusable: a node that cannot build a
+	// challenge cannot be paid, and it is better to know at startup.
 	kind, err := fac.Kind(ctx, x402.SchemeExact, cfg.Network)
 	if err != nil {
 		cancelNode()
@@ -76,16 +76,18 @@ func buildNode(ctx context.Context, configPath string, log *slog.Logger) (*node,
 	log.Info("facilitator ready",
 		"url", cfg.FacilitatorURL, "network", cfg.Network, "fee_payer", feePayer)
 
-	// Leasing is set up before the runner and the server so that a tunnel which
-	// supplies this node's public URL has done so before anything reads it.
+	// Leasing is prepared before the runner and the server, which are handed it
+	// below.
 	leases, err := startLeasing(ctx, &cfg, configPath, log)
 	if err != nil {
-		// Not fatal: a node whose tunnel will not come up should still sell
-		// batch jobs, which is the mode that needs no inbound reachability at
-		// all. It just does not sell leases (CLAUDE.md invariant 9).
-		log.Error("leasing is configured but could not be started; this node will sell jobs only",
-			"error", err)
-		leases = nil
+		// Fatal: sessions are all a node sells, so a node that cannot prepare
+		// them — its SSH certificate authority, most likely — has nothing to
+		// offer and should say so at startup rather than list itself.
+		cancelNode()
+		return nil, fmt.Errorf("could not prepare leasing: %w", err)
+	}
+	if leases == nil {
+		log.Warn("leases.enabled is false, so this node sells nothing; re-run `cleargate-node setup`")
 	}
 
 	run, err := runner.New(ctx, cfg, log)
@@ -97,7 +99,7 @@ func buildNode(ctx context.Context, configPath string, log *slog.Logger) (*node,
 	log.Info("node ready",
 		"node_id", cfg.NodeID,
 		"pay_to", cfg.PayTo,
-		"price_tinybars", cfg.PriceTinybars,
+		"price_tinybars_per_minute", cfg.Leases.PriceTinybarsPerMinute,
 		"gpu", run.GPU().Available,
 		"leases", leases != nil,
 	)
@@ -105,8 +107,8 @@ func buildNode(ctx context.Context, configPath string, log *slog.Logger) (*node,
 	server := httpapi.New(cfg, run, fac, log, version)
 
 	// The signing sidecar and everything built on it. Failures here are logged
-	// and survived rather than fatal, for the same reason a tunnel failure is:
-	// a node that cannot publish its audit trail should still sell compute.
+	// and survived rather than fatal: without the sidecar the /v1/sessions routes
+	// stay closed, and the error says why.
 	if err := enableHedera(ctx, cfg, server, log); err != nil {
 		log.Error("Hedera features are configured but could not be started", "error", err)
 	}

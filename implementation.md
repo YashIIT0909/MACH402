@@ -71,8 +71,8 @@ Phase 6 — hcs.go
 Phase 7 — client (client/src)
 
 - Delete whatever currently builds openSession/topUp contract calls (Hedera SDK contract-execute path for escrow).
-- pay.ts's existing payFor() now targets /v1/sessions and /v1/sessions/{id}/topup the same way it already targets /v1/leases — no new client-side payment logic, since both are now plain x402 exact-scheme cycles.
-- Add a small watch loop in the session-holding code path (mirrors holdLease's --budget enforcement): poll or read the SSE state, and when low_credits: true appears, fire payFor() against /topup automatically (CLI) or surface a wallet-prompt affordance (browser, reusing the existing wallet-signing work from the recent feat(client): sign x402 payments from a browser wallet commit).
+- The existing x402 payer now targets /v1/sessions and /v1/sessions/{id}/topup the same way it already targets /v1/leases — no new client-side payment logic, since both are now plain x402 exact-scheme cycles.
+- Add a small watch loop in the browser session flow: poll or read the SSE state, and when low_credits: true appears, pay /topup through a wallet prompt (reusing the existing wallet-signing work from the recent feat(client): sign x402 payments from a browser wallet commit).
 
 Phase 8 — config (agent/internal/config)
 

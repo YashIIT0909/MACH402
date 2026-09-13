@@ -33,8 +33,8 @@ export default async function NodesPage() {
               <p className="text-muted-foreground">
                 The registry is expected at <Code>{REGISTRY_URL}</Code>. Start it with{" "}
                 <Code>make dev-registry</Code>, or run <Code>make dev-registry-sample</Code> for
-                fixture data. Nodes keep selling jobs either way: a registry outage never
-                interrupts a paid job.
+                fixture data. Nodes keep selling either way: a registry outage never
+                interrupts a paid session.
               </p>
             </Notice>
           ) : result.nodes.length === 0 ? (
@@ -84,7 +84,8 @@ export default async function NodesPage() {
             </h2>
             <p className="mb-10 max-w-2xl type-lede text-muted-foreground">
               <Code>/v1/specs</Code> is free on every node, because discovery that costs money is
-              discovery agents cannot do. Only <Code>cleargate run</Code> pays.
+              discovery agents cannot do. Asking for a session is free too: the node answers{" "}
+              <Code>402</Code> with its price, and only a signed payment moves money.
             </p>
 
             <div className="max-w-3xl border border-foreground/10">
@@ -94,16 +95,14 @@ export default async function NodesPage() {
                 </span>
                 <span className="flex items-center gap-2 font-mono text-xs text-accent">
                   <span className="h-2 w-2 rounded-full bg-accent" />
-                  free until you run
+                  free until you pay
                 </span>
               </div>
-              <pre className="overflow-x-auto bg-foreground/[0.02] p-6 font-mono text-sm leading-relaxed text-foreground/80">{`cleargate quote --node <public url>
+              <pre className="overflow-x-auto bg-foreground/[0.02] p-6 font-mono text-sm leading-relaxed text-foreground/80">{`curl -s <public url>/v1/specs
 
-cleargate run \\
-  --node <public url> \\
-  --image python:3.11-slim \\
-  --script examples/train.py \\
-  --output result.tar`}</pre>
+curl -si -X POST <public url>/v1/sessions \\
+  -H 'Content-Type: application/json' \\
+  -d '{"seconds":300,"public_key":"ssh-ed25519 AAAA…"}'`}</pre>
             </div>
           </div>
         </section>
@@ -118,7 +117,7 @@ function NodeTable({ nodes }: { nodes: NodeListing[] }) {
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr>
-            {["Node", "Status", "GPU", "Price", "Limits", "Paid to"].map((heading) => (
+            {["Node", "Status", "GPU", "Price", "Container", "Paid to"].map((heading) => (
               <th
                 key={heading}
                 className="type-label py-4 pr-5 text-left font-medium whitespace-nowrap text-muted-foreground last:pr-0"
@@ -136,29 +135,21 @@ function NodeTable({ nodes }: { nodes: NodeListing[] }) {
             >
               <td className="py-5 pr-5 align-top">
                 <span className="font-mono">{node.node_id}</span>
-                <Sub mono>{node.public_url}</Sub>
+                <Sub mono nowrap>{node.public_url}</Sub>
                 <Sub>agent {node.agent_version}</Sub>
               </td>
               <td className="py-5 pr-5 align-top">
                 <Status node={node} />
-                <Sub>seen {new Date(node.last_seen_at).toLocaleTimeString()}</Sub>
+                <Sub nowrap>seen {new Date(node.last_seen_at).toLocaleTimeString()}</Sub>
               </td>
               <td className="py-5 pr-5 align-top">
                 <Gpu node={node} />
               </td>
               <td className="py-5 pr-5 align-top">
-                <span className="font-mono whitespace-nowrap">{hbar(node.price_tinybars)} HBAR</span>
-                <Sub mono>{node.price_tinybars} tinybars · per job</Sub>
-                {/* Two products on one node. A node that never opted into
-                    leasing announces no lease block at all, so this cell reads
-                    exactly as it did before leasing existed. */}
-                <Lease node={node} />
+                <Price node={node} />
               </td>
               <td className="py-5 pr-5 align-top">
-                <span className="whitespace-nowrap">
-                  {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB
-                </span>
-                <Sub mono>{node.limits.max_seconds}s max</Sub>
+                <Container node={node} />
               </td>
               <td className="py-5 align-top">
                 <span className="font-mono">{node.pay_to}</span>
@@ -183,19 +174,18 @@ function NodeCard({ node }: { node: NodeListing }) {
       </div>
 
       <div className="mb-5 border-b border-foreground/10 pb-5">
-        <div className="type-stat">{hbar(node.price_tinybars)} HBAR</div>
-        <Sub mono>{node.price_tinybars} tinybars per job</Sub>
-        <Lease node={node} />
+        <Price node={node} stat />
       </div>
 
       <dl className="space-y-3">
         <Row label="GPU">
           <Gpu node={node} />
         </Row>
-        <Row label="Limits">
+        <Row label="Container">
           <Sub flush>
-            {node.limits.cpu_cores} cores · {Math.round(node.limits.memory_mb / 1024)} GB ·{" "}
-            {node.limits.max_seconds}s max
+            {node.leases === undefined
+              ? "—"
+              : `${node.leases.cpu_cores} cores · ${Math.round(node.leases.memory_mb / 1024)} GB · ${node.leases.workspace_gb} GB workspace`}
           </Sub>
         </Row>
         <Row label="Paid to">
@@ -260,39 +250,58 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /**
- * The metered half of what a node sells, when it sells it.
+ * What a node charges for a session, and the way into renting one.
  *
- * Rendered as a second line under the flat job price rather than its own
- * column: most nodes offer only jobs, and a column that is empty on most rows
- * costs every reader width to tell a minority of them something.
+ * A node running a build from before metered sessions sells prepaid minutes,
+ * which this site no longer buys: it is listed, so it does not silently vanish,
+ * but not offered. A node with leasing switched off sells nothing at all.
  */
-function Lease({ node }: { node: NodeListing }) {
-  if (node.leases === undefined) return null;
-
+function Price({ node, stat = false }: { node: NodeListing; stat?: boolean }) {
   const offer = node.leases;
-  const reach = offer.ssh && offer.jupyter ? "ssh + jupyter" : offer.ssh ? "ssh" : "jupyter only";
+  if (offer === undefined) {
+    return <Sub flush>not selling</Sub>;
+  }
+
+  const metered = offer.payment_mode === "session";
 
   return (
-    <span className="mt-3 block border-t border-foreground/10 pt-3">
-      <span className="font-mono whitespace-nowrap text-accent">
+    <>
+      <span className={stat ? "block type-stat" : "font-mono whitespace-nowrap"}>
         {hbar(offer.price_tinybars_per_minute)} HBAR
       </span>
       <Sub mono>
-        per minute · {reach}
+        {metered ? "per minute · billed by the second · refundable" : "older build · not rentable"}
         {offer.gpu ? "" : " · cpu only"}
       </Sub>
       {/* Only an online node can actually be rented. Offering the link on an
           offline one would send a renter to a page whose only content is an
           explanation of why they cannot buy anything. */}
-      {node.online ? (
+      {node.online && metered ? (
         <Link
           href={`/rent/${node.node_id}`}
           className="mt-2 inline-block text-sm text-accent underline-offset-4 hover:underline"
         >
-          Rent by the minute →
+          Rent by the second →
         </Link>
       ) : null}
-    </span>
+    </>
+  );
+}
+
+/** The container a session gets — the part of the machine a renter is buying. */
+function Container({ node }: { node: NodeListing }) {
+  const offer = node.leases;
+  if (offer === undefined) {
+    return <Sub flush>—</Sub>;
+  }
+
+  return (
+    <>
+      <span className="whitespace-nowrap">
+        {offer.cpu_cores} cores · {Math.round(offer.memory_mb / 1024)} GB
+      </span>
+      <Sub mono>{offer.workspace_gb} GB workspace</Sub>
+    </>
   );
 }
 
@@ -352,16 +361,23 @@ function Sub({
   children,
   mono = false,
   flush = false,
+  nowrap = false,
 }: {
   children: React.ReactNode;
   mono?: boolean;
   flush?: boolean;
+  /**
+   * Keep to one line. For table cells, where the table scrolls sideways
+   * rather than breaking a URL mid-hostname ("example.n / et") or a time in
+   * two ("12:48:26 / PM"). Card layouts leave it off and wrap as before.
+   */
+  nowrap?: boolean;
 }) {
   return (
     <span
       className={`block text-xs text-muted-foreground ${flush ? "" : "mt-1"} ${
-        mono ? "font-mono break-all" : ""
-      }`}
+        mono ? (nowrap ? "font-mono" : "font-mono break-all") : ""
+      } ${nowrap ? "whitespace-nowrap" : ""}`}
     >
       {children}
     </span>

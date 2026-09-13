@@ -9,14 +9,13 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 )
 
 // leasingView is the screen for the trade a provider should watch hardest: a
 // stranger with a shell on their machine.
 //
-// Everything a lease does that a job does not — freeze instead of kill, a
+// Everything a session does — freeze instead of kill, a
 // credit that burns down, a refund the node owes back — is a number that only
 // makes sense next to the others, which is why they get a screen rather than a
 // line in a stack.
@@ -32,7 +31,7 @@ func (m *Model) leasingView(width, height int) string {
 			styleDim.Render("anything else. `cleargate-node setup --enable-leases` opts in,"),
 			styleDim.Render("and `make lease-image` builds the runtime it needs."),
 			"",
-			styleDim.Render("until then POST /v1/leases answers 404 and nothing changes."),
+			styleDim.Render("until then POST /v1/sessions answers 404 and nothing changes."),
 		))
 	}
 
@@ -66,39 +65,12 @@ func (m *Model) leaseSummary(width int) []string {
 		return []string{styleDim.Render("no active lease — listening for renters")}
 	}
 
-	state := lease.State()
 	status := leaseStatusStyle(lease.Status()).Render(strings.ToUpper(string(lease.Status())))
 	bars := max(min(width-30, 40), 10)
 
 	head := fmt.Sprintf("%s  %s  %s",
 		styleTitle.Render(short(lease.ID)), status,
 		styleDim.Render("payer "+orNone(lease.Payer())))
-
-	if lease.SessionID() == "" {
-		// Direct-paid: what was bought is time, and time is the whole story.
-		remaining := time.Until(lease.ExpiresAt())
-		bought := time.Duration(state.PaidMinutes) * time.Minute
-		used := 0.0
-		if bought > 0 {
-			used = 1 - float64(remaining)/float64(bought)
-		}
-		lines := []string{
-			head,
-			kv("bought", fmt.Sprintf("%d minute(s), forward-paid", state.PaidMinutes)),
-			kv("time left", meter(1-used, bars, timeStyle(remaining))+"  "+duration(remaining)),
-			kv("gpu", yesNo(state.GPU, "yes", "no")),
-		}
-		if overdue := lease.OverdueBy(); overdue > 0 {
-			lines = append(lines, kv("overdue", styleWarn.Render(
-				duration(overdue)+" past expiry — freezing, then reaped after "+
-					fmt.Sprintf("%d min", m.cfg.Leases.GraceMinutes))))
-		}
-		if lease.Status() == runner.LeasePaused {
-			lines = append(lines, kv("frozen", styleWarn.Render(
-				"for "+duration(lease.PausedFor())+" — the container is paused, not destroyed")))
-		}
-		return lines
-	}
 
 	// Metered: the number that matters is the live credit, because that is
 	// simultaneously "how much runway is left" and "what would be refunded
@@ -167,18 +139,10 @@ func (m *Model) leaseAccess(width int) []string {
 		return append(lines, styleDim.Render("no tunnel — leasing is configured without one"))
 	}
 
-	if endpoints.Mode == config.TunnelQuick {
-		lines = append(lines,
-			kv("tunnel", "quick"+styleDim.Render("  no Cloudflare account, random hostname")),
-			kv("jupyter", orNone(endpoints.JupyterURL)),
-			kv("ssh", styleWarn.Render("not available — a quick tunnel carries no TCP")))
-		return lines
-	}
-	lines = append(lines,
-		kv("tunnel", "named"+styleDim.Render("  stable hostnames, provisioned by the registry")),
+	return append(lines,
+		kv("tunnel", "quick"+styleDim.Render("  no Cloudflare account, random hostname")),
 		kv("jupyter", orNone(endpoints.JupyterURL)),
-		kv("ssh", orNone(endpoints.SSHHost)))
-	return lines
+		kv("ssh", styleWarn.Render("not available — a quick tunnel carries no TCP")))
 }
 
 // leaseTerms is what a renter sees on /v1/specs before they pay, shown to the
@@ -187,36 +151,27 @@ func (m *Model) leaseAccess(width int) []string {
 func (m *Model) leaseTerms(width int) []string {
 	leases := m.cfg.Leases
 
-	mode := "direct" + styleDim.Render("  forward-paid per slice, not refundable")
-	if leases.PaymentMode == config.PaymentSession {
-		switch {
-		case !m.cfg.HCS.Enabled:
-			// config.validate refuses this combination at load, so reaching it
-			// here means a config hand-edited after the fact — worth a loud
-			// line rather than a silent gap in what this node can prove.
-			mode = styleBad.Render("session, but NOT publishing a refund trail — this should be impossible")
-		case leases.SelfSettle:
-			mode = styleAccent.Render("session") +
-				styleDim.Render("  metered, refunds paid automatically, topic ") + m.cfg.HCS.TopicID
-		default:
-			mode = styleAccent.Render("session") +
-				styleWarn.Render("  metered, refunds must be paid by hand") +
-				styleDim.Render("  topic "+m.cfg.HCS.TopicID)
-		}
+	mode := styleAccent.Render("session") +
+		styleDim.Render("  metered, refunds paid automatically, topic ") + m.cfg.HCS.TopicID
+	if !m.cfg.HCS.Enabled {
+		// config.validate refuses this combination at load, so reaching it
+		// here means a config hand-edited after the fact — worth a loud line
+		// rather than a silent gap in what this node can prove.
+		mode = styleBad.Render("session, but NOT publishing a refund trail — this should be impossible")
 	}
 
 	return []string{
 		kv("payment", mode),
 		kv("price", formatHBAR(parseTinybars(leases.PriceTinybarsPerMinute))+
-			styleDim.Render(" per minute   ")+
-			fmt.Sprintf("%d–%d min per slice, %d max total",
-				leases.MinMinutes, leases.MaxMinutes, leases.MaxTotalMinutes)),
+			styleDim.Render(" per minute, burned by the second   ")+
+			fmt.Sprintf("%ds chunks, %d–%d min sessions, %d max total",
+				leases.SessionChunkSeconds, leases.MinMinutes, leases.MaxMinutes, leases.MaxTotalMinutes)),
 		kv("image", truncate(leases.Image, width-14)),
 		kv("gpu", yesNo(m.runner.LeaseGPU(),
 			"a lease container can use this card",
 			"no — the host has a card or the lease image has no CUDA runtime")),
-		kv("overrun", fmt.Sprintf("frozen %ds past expiry, reaped %d min later",
-			leases.OverrunSeconds, leases.GraceMinutes)),
+		kv("overrun", fmt.Sprintf("frozen 30s after credit runs out, reaped %d min later",
+			leases.GraceMinutes)),
 		kv("egress", truncate(strings.Join(leases.Egress.Allowlist, ", "), width-14)),
 	}
 }
@@ -262,4 +217,11 @@ func timeStyle(remaining time.Duration) lipgloss.Style {
 	default:
 		return styleGood
 	}
+}
+
+func gpuMark(gpu bool) string {
+	if gpu {
+		return "gpu"
+	}
+	return "cpu"
 }

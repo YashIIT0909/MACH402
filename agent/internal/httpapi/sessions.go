@@ -66,11 +66,11 @@ type sessionResponse struct {
 
 // handleCreateSession sells interactive time as a metered, refundable credit.
 //
-// Mechanically this is handleCreateLease: the same x402 exact-scheme cycle,
-// against the same facilitator, in the same order. What differs is what the
-// money becomes once it settles. A lease's payment buys TIME and is gone; a
-// session's payment buys CREDIT, which the meter burns down second by second
-// and whose remainder belongs to the renter the moment they stop.
+// Mechanically this is handleCreateJob's x402 exact-scheme cycle, against the
+// same facilitator, in the same order, with a reachability check before the
+// settlement. What the money becomes once it settles is CREDIT, which the meter
+// burns down second by second and whose remainder belongs to the renter the
+// moment they stop.
 //
 //  1. validate the spec                  -> 400, and costs nothing
 //  2. no payment header                  -> 402 challenge, priced per chunk
@@ -236,11 +236,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 // handleTopUpSession banks another paid chunk onto a live session.
 //
-// The metered twin of handleExtendLease, and simpler than it: an extension has
-// to be applied before it settles and reverted if it does not, because the
-// thing being bought is time that has to be in place first. A top-up buys
-// credit, which is worth nothing until it is banked — so it is banked after the
-// settlement, and a failed payment leaves the session exactly as it was.
+// A top-up buys credit, which is worth nothing until it is banked — so it is
+// banked after the settlement, and a failed payment leaves the session exactly
+// as it was. Nothing has to be applied ahead of the money and reverted if the
+// money does not arrive.
 func (s *Server) handleTopUpSession(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionsEnabled(w) {
 		return
@@ -340,8 +339,7 @@ func (s *Server) handleSessionState(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionStop ends a session early. Free, token-gated.
 //
-// This is where metering earns its place. Stopping a lease ends the meter and
-// forfeits the rest of the slice; stopping a session charges for the seconds
+// This is where metering earns its place: stopping charges for the seconds
 // actually used and returns the rest. The final burn happens first, so what is
 // refunded is measured against the same meter that has been publishing burn
 // checkpoints all along rather than against a fresh calculation at the moment
@@ -437,15 +435,15 @@ func (s *Server) tickMeter(lease *runner.Lease) {
 // sweep reaping it after its grace period — and idempotent, because more than
 // one of those can fire for the same session.
 //
-// A node with self_settle off cannot pay, and says so with everything needed to
+// A node without a working sidecar cannot pay, and says so with everything needed to
 // pay by hand: the session, the payer and the amount. That is not an error
 // state that loses anyone money, but it is a debt, and the honest thing is to
 // log it as one rather than to let it disappear. The burn trail on the audit
 // topic is the record that outlives the log.
 func (s *Server) settleSession(ctx context.Context, lease *runner.Lease) {
 	sessionID := lease.SessionID()
-	// Not a session, or already settled. The first case matters because the
-	// lease sweep calls this for every lease, including direct-paid ones.
+	// Not a session yet, or already settled. The first case is a lease whose
+	// opening chunk never settled, which the sweep can still see.
 	if sessionID == "" || lease.SettleState() != runner.SettlePending {
 		return
 	}
@@ -463,7 +461,7 @@ func (s *Server) settleSession(ctx context.Context, lease *runner.Lease) {
 
 	if s.sidecar == nil {
 		s.log.Warn("session ended with credit owed back, and this node cannot refund it itself; "+
-			"pay it by hand or turn on leases.self_settle",
+			"pay it by hand, and check that cleargate-hedera is installed",
 			"session", sessionID, "payer", payer, "owed_tinybars", owed.String())
 		s.recordSessionSettlement(lease, owed, "")
 		return
@@ -649,9 +647,8 @@ func (s *Server) sessionState(lease *runner.Lease) map[string]any {
 
 // sessionsEnabled answers 404 on a node that does not sell metered sessions.
 //
-// 404 rather than 403, for the same reason /v1/leases does: a node that never
-// opted in should be indistinguishable from one running a version from before
-// sessions existed.
+// 404 rather than 403: a node that never opted in should be indistinguishable
+// from one running a version from before sessions existed.
 func (s *Server) sessionsEnabled(w http.ResponseWriter) bool {
 	if s.sessions && s.runner.LeasesEnabled() && s.ca != nil && s.tunnel != nil {
 		return true

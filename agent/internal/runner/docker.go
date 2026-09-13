@@ -1,4 +1,4 @@
-// Package runner starts and supervises job containers.
+// Package runner starts and supervises lease containers.
 //
 // It speaks the Docker HTTP API directly over the unix socket rather than
 // pulling in the Docker SDK: the agent ships as a single small static binary,
@@ -232,8 +232,7 @@ type HostConfig struct {
 	DeviceRequests []DeviceRequest `json:"DeviceRequests,omitempty"`
 	AutoRemove     bool            `json:"AutoRemove"`
 	CapDrop        []string        `json:"CapDrop"`
-	// CapAdd is empty for jobs and stays as close to empty as it can for
-	// leases: sshd needs a handful of capabilities to drop privileges into the
+	// CapAdd stays as close to empty as it can for leases: sshd needs a handful of capabilities to drop privileges into the
 	// renter's account, and nothing beyond those is ever granted.
 	CapAdd      []string          `json:"CapAdd,omitempty"`
 	SecurityOpt []string          `json:"SecurityOpt"`
@@ -319,7 +318,7 @@ func (d *Docker) WaitContainer(ctx context.Context, id string) (int, error) {
 
 // PauseContainer freezes every process in a container through the cgroup
 // freezer. Used when a lease's paid time lapses: the renter's work is still
-// there, using memory but no CPU, until they either extend or the grace period
+// there, using memory but no CPU, until they either top up or the grace period
 // runs out. Killing on the first missed payment would throw away work someone
 // was in the middle of.
 func (d *Docker) PauseContainer(ctx context.Context, id string) error {
@@ -404,7 +403,7 @@ func (d *Docker) ListNetworksByLabel(ctx context.Context, label string) ([]strin
 	return names, nil
 }
 
-// CreateVolume creates a named volume for a job's output directory.
+// CreateVolume creates a named volume, such as a lease's workspace.
 func (d *Docker) CreateVolume(ctx context.Context, name string, labels map[string]string) error {
 	body := map[string]any{"Name": name, "Labels": labels}
 	return d.doJSON(ctx, http.MethodPost, "/volumes/create", nil, body, nil)

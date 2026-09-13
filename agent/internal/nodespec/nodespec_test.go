@@ -12,8 +12,8 @@ import (
 // The registry validates every one of these and rejects a heartbeat missing
 // any, so renaming a field here is a cross-team break, not a refactor.
 var requiredHeartbeatFields = []string{
-	"node_id", "agent_version", "public_url", "pay_to", "price_tinybars",
-	"facilitator_url", "network", "asset", "paused", "gpu", "limits", "image_allowlist",
+	"node_id", "agent_version", "public_url", "pay_to",
+	"facilitator_url", "network", "asset", "paused", "gpu",
 }
 
 func testConfig() config.Config {
@@ -49,12 +49,6 @@ func TestHeartbeatCarriesEveryFieldTheRegistryRequires(t *testing.T) {
 		if _, present := decoded[field]; !present {
 			t.Errorf("heartbeat is missing %q, which the registry requires", field)
 		}
-	}
-
-	// A string end to end: tinybars overflow a double, and no amount in
-	// ClearGate is ever a number on the wire.
-	if _, ok := decoded["price_tinybars"].(string); !ok {
-		t.Errorf("price_tinybars must serialize as a string, got %T", decoded["price_tinybars"])
 	}
 }
 

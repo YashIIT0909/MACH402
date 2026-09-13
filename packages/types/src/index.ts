@@ -23,6 +23,5 @@ export type {
 
 export * from "./x402.js";
 export * from "./node.js";
-export * from "./job.js";
 export * from "./lease.js";
 export * from "./session.js";

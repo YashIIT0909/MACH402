@@ -9,7 +9,7 @@
  *
  * Nothing in this module or its imports touches `node:` builtins, `dotenv` or
  * `process.env`, which is what makes it bundleable. Import from
- * `@cleargate/client/browser`, never from `../pay.js`.
+ * `@cleargate/client/browser`, never from a node-side module.
  */
 import { Client } from "@hiero-ledger/sdk";
 import { HEDERA_TESTNET } from "@cleargate/types";
@@ -39,7 +39,7 @@ export {
  * Builds a paying fetch backed by a connected browser wallet.
  *
  * The returned `fetch` answers a node's 402 by asking the wallet to sign, so a
- * page calls `POST /v1/leases` once and the payment happens inside that call.
+ * page calls `POST /v1/sessions` once and the payment happens inside that call.
  *
  * @param wallet - The connected wallet: an account id and a sign-without-submit.
  * @param options - Network and the renter's own per-payment cap.

@@ -10,7 +10,7 @@
 // a payment turns out to need none of those, which is the property that lets
 // escrow mode exist without breaking CLAUDE.md invariant 1.
 //
-// The discipline from the job and lease paths carries over unchanged: the node
+// The discipline from the session path carries over unchanged: the node
 // checks the on-chain record against the quote IT issued, never against what
 // the renter says they sent. A renter controls the transaction id they present
 // and every argument inside it; the only thing they cannot forge is what the

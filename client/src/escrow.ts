@@ -2,12 +2,12 @@
  * Renter-side calls to the SessionEscrow contract.
  *
  * This is the second place in ClearGate that signs a Hedera transaction, beside
- * `pay.ts`, and it holds to the same rule: all payment signing lives in
+ * `payment.ts`, and it holds to the same rule: all payment signing lives in
  * `client/`, in TypeScript, on the renter's own machine (CLAUDE.md invariants 1
  * and 2). A `ContractExecuteTransaction` is signed exactly where and how a
  * `TransferTransaction` already is.
  *
- * The difference from `pay.ts` is that there is no facilitator here. The x402
+ * The difference from `payment.ts` is that there is no facilitator here. The x402
  * flow needs one because the renter signs a transfer that somebody else has to
  * co-sign as fee payer and submit. A contract call the renter signs and submits
  * themselves is already final on Hedera consensus the moment it succeeds, so
@@ -67,7 +67,7 @@ export interface SettlementQuote {
 /**
  * A signing connection to Hedera, built from the renter's own credentials.
  *
- * Deliberately separate from the `x402Client` in `pay.ts`: that one exists to
+ * Deliberately separate from the `x402Client` in `payment.ts`: that one exists to
  * negotiate 402 challenges and knows about payment policies, and none of that
  * applies to a contract call the renter makes directly.
  */

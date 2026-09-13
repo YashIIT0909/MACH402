@@ -26,7 +26,7 @@ import (
 	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
 )
 
-// refreshInterval drives the clock, the job table and the lease countdown.
+// refreshInterval drives the clock and the lease countdown.
 // Fast enough to feel live, slow enough that an idle node is not spinning a CPU
 // it is trying to rent out.
 const refreshInterval = time.Second
@@ -43,23 +43,19 @@ const maxFeedLines = 500
 // at gpuPollInterval, about two minutes of history.
 const gpuHistoryLen = 60
 
-// maxLogLines bounds the tail kept for the selected job.
-const maxLogLines = 400
-
 // tab is one screen of the dashboard.
 //
 // Tabs rather than one long stack because the previous layout drew every
 // section at once and gave each of them three or four lines, which meant the
-// job table, the log tail and the payment feed were all permanently too short
-// to be useful. A provider is doing one of a small number of things at a time —
-// watching money land, watching a job run, checking why nobody can find their
-// node — and each of those deserves the whole screen while it is the thing
+// lease panel and the payment feed were both permanently too short to be
+// useful. A provider is doing one of a small number of things at a time —
+// watching money land, watching a session run, checking why nobody can find
+// their node — and each of those deserves the whole screen while it is the thing
 // being done.
 type tab int
 
 const (
 	tabOverview tab = iota
-	tabJobs
 	tabLeases
 	tabActivity
 	tabNode
@@ -67,14 +63,12 @@ const (
 
 // tabOrder is the left-to-right order of the tab strip, and what the number
 // keys select.
-var tabOrder = []tab{tabOverview, tabJobs, tabLeases, tabActivity, tabNode}
+var tabOrder = []tab{tabOverview, tabLeases, tabActivity, tabNode}
 
 func (t tab) title() string {
 	switch t {
 	case tabOverview:
 		return "Overview"
-	case tabJobs:
-		return "Jobs"
 	case tabLeases:
 		return "Leasing"
 	case tabActivity:
@@ -95,7 +89,6 @@ type feedFilter int
 const (
 	filterAll feedFilter = iota
 	filterMoney
-	filterJobs
 	filterLeases
 )
 
@@ -103,8 +96,6 @@ func (f feedFilter) title() string {
 	switch f {
 	case filterMoney:
 		return "money"
-	case filterJobs:
-		return "jobs"
 	case filterLeases:
 		return "leases"
 	}
@@ -158,20 +149,12 @@ type Model struct {
 	tab      tab
 	showHelp bool
 
-	jobs     []runner.State
-	selected int
-	feed     []runner.Event
+	feed []runner.Event
 
 	// feedFilter and feedOffset belong to the Activity tab. feedOffset counts
 	// lines back from the newest, so zero means pinned to live.
 	feedFilter feedFilter
 	feedOffset int
-
-	// logs holds the tail of the selected job's output. It is re-subscribed
-	// whenever the selection changes, so only one job streams at a time.
-	logTail   []runner.LogLine
-	logJobID  string
-	logCancel context.CancelFunc
 
 	// ledger is every settlement this node has ever taken, oldest first, seeded
 	// from receipts.jsonl and appended to as payments land.
@@ -186,9 +169,8 @@ type Model struct {
 	quitting  bool
 
 	// confirm is the pending destructive action, if the provider has pressed
-	// its key once. Killing a job forfeits a renter's payment and evicting a
-	// lease takes a stranger's shell away mid-command; neither should be one
-	// stray keystroke away.
+	// its key once. Evicting a lease takes a stranger's shell away mid-command,
+	// which should not be one stray keystroke away.
 	confirm     string
 	confirmText string
 
@@ -196,13 +178,13 @@ type Model struct {
 	flashUntil  time.Time
 
 	// eventCh is the live subscription to the runner's broker. program is the
-	// bubbletea handle log lines are pushed through from their own goroutine.
+	// bubbletea handle the dashboard runs under.
 	eventCh chan runner.Event
 	program *tea.Program
 }
 
-// Attach hands the model the program it runs under, so background goroutines
-// following a job's logs can push lines into the update loop.
+// Attach hands the model the program it runs under, so background work can
+// push messages into the update loop.
 func (m *Model) Attach(program *tea.Program) { m.program = program }
 
 // New builds the dashboard model.
@@ -260,7 +242,6 @@ type (
 	tickMsg    time.Time
 	gpuMsg     struct{ util, usedMB int }
 	eventMsg   runner.Event
-	logMsg     runner.LogLine
 	serverDown struct{ err error }
 )
 
@@ -271,7 +252,6 @@ func (m *Model) Init() tea.Cmd {
 		m.feed = append(m.feed, event)
 	}
 	m.trimFeed()
-	m.jobs = sortedJobs(m.runner.List())
 
 	return tea.Batch(
 		tick(),
@@ -311,9 +291,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
-		m.jobs = sortedJobs(m.runner.List())
-		m.clampSelection()
-		m.followSelectedJob()
 		return m, tick()
 
 	case gpuMsg:
@@ -327,10 +304,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		m.record(runner.Event(msg))
 		return m, m.nextEvent(m.eventCh)
-
-	case logMsg:
-		m.appendLog(runner.LogLine(msg))
-		return m, nil
 
 	case serverDown:
 		m.serverErr = msg.err
@@ -373,7 +346,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "1", "2", "3", "4", "5":
+	case "1", "2", "3", "4":
 		index := int(key[0] - '1')
 		if index < len(tabOrder) {
 			m.setTab(tabOrder[index])
@@ -409,7 +382,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "f":
 		if m.tab == tabActivity {
-			m.feedFilter = (m.feedFilter + 1) % 4
+			m.feedFilter = (m.feedFilter + 1) % 3
 			m.feedOffset = 0
 			m.flash("showing " + m.feedFilter.title())
 		}
@@ -423,30 +396,22 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash("accepting work again")
 		}
 
-	case "x":
-		m.askKillJob()
-
 	case "e":
 		m.askEndLease()
 	}
 	return m, nil
 }
 
-// setTab switches screens and points the selection at something that exists on
-// the new one.
+// setTab switches screens.
 func (m *Model) setTab(next tab) {
 	if next == m.tab {
 		return
 	}
 	m.tab = next
 	m.feedOffset = 0
-	if next == tabJobs {
-		m.clampSelection()
-		m.followSelectedJob()
-	}
 }
 
-// moveSelection is the arrow keys, meaning whatever the current tab is about.
+// moveSelection is the arrow keys, which scroll the Activity feed.
 func (m *Model) moveSelection(delta int) {
 	switch m.tab {
 	case tabActivity:
@@ -458,29 +423,7 @@ func (m *Model) moveSelection(delta int) {
 		if m.feedOffset < 0 {
 			m.feedOffset = 0
 		}
-	default:
-		m.selected += delta
-		m.clampSelection()
-		m.followSelectedJob()
 	}
-}
-
-// askKillJob arms the confirmation for killing the highlighted job.
-func (m *Model) askKillJob() {
-	if m.tab != tabJobs && m.tab != tabOverview {
-		return
-	}
-	job, ok := m.selectedJob()
-	if !ok {
-		return
-	}
-	if job.Status.IsTerminal() {
-		m.flash("job " + short(job.JobID) + " has already finished")
-		return
-	}
-	m.confirm = "x"
-	m.confirmText = "kill job " + short(job.JobID) +
-		"? the renter paid up front and is NOT refunded — press x again to confirm"
 }
 
 // askEndLease arms the confirmation for evicting the lease running right now.
@@ -494,10 +437,7 @@ func (m *Model) askEndLease() {
 		return
 	}
 
-	outcome := "their remaining slice is not refunded"
-	if lease.SessionID() != "" {
-		outcome = "they are refunded " + formatHBARBig(lease.Credit()) + " of unburned credit"
-	}
+	outcome := "they are refunded " + formatHBARBig(lease.Credit()) + " of unburned credit"
 	m.confirm = "e"
 	m.confirmText = "end lease " + short(lease.ID) + "? " + outcome +
 		" — press e again to confirm"
@@ -505,27 +445,11 @@ func (m *Model) askEndLease() {
 
 // runConfirmed performs a destructive action the provider has now pressed twice.
 //
-// Both branches hand the work to a goroutine with its own context: stopping a
+// It hands the work to a goroutine with its own context: stopping a
 // container can take tens of seconds, and the dashboard must keep redrawing
 // while it happens rather than appearing to hang on the keystroke.
 func (m *Model) runConfirmed(action string) tea.Cmd {
 	switch action {
-	case "x":
-		job, ok := m.selectedJob()
-		if !ok {
-			return nil
-		}
-		live, found := m.runner.Get(job.JobID)
-		if !found {
-			return nil
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = m.runner.Kill(ctx, live)
-		}()
-		m.flash("killing " + short(job.JobID) + " — the renter is not refunded")
-
 	case "e":
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -566,73 +490,6 @@ func (m *Model) trimFeed() {
 	}
 }
 
-func (m *Model) selectedJob() (runner.State, bool) {
-	if m.selected < 0 || m.selected >= len(m.jobs) {
-		return runner.State{}, false
-	}
-	return m.jobs[m.selected], true
-}
-
-func (m *Model) clampSelection() {
-	if m.selected >= len(m.jobs) {
-		m.selected = len(m.jobs) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
-}
-
-// followSelectedJob keeps the log pane pointed at whatever is highlighted,
-// tearing down the previous subscription so only one job streams at a time.
-func (m *Model) followSelectedJob() {
-	job, ok := m.selectedJob()
-	if !ok || job.JobID == m.logJobID {
-		return
-	}
-
-	if m.logCancel != nil {
-		m.logCancel()
-	}
-	live, found := m.runner.Get(job.JobID)
-	if !found {
-		return
-	}
-
-	m.logJobID = job.JobID
-	m.logTail = live.Logs()
-	if len(m.logTail) > maxLogLines {
-		m.logTail = m.logTail[len(m.logTail)-maxLogLines:]
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.logCancel = cancel
-
-	_, ch := live.Subscribe()
-	go func() {
-		defer live.Unsubscribe(ch)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case line, open := <-ch:
-				if !open {
-					return
-				}
-				if m.program != nil {
-					m.program.Send(logMsg(line))
-				}
-			}
-		}
-	}()
-}
-
-func (m *Model) appendLog(line runner.LogLine) {
-	m.logTail = append(m.logTail, line)
-	if len(m.logTail) > maxLogLines {
-		m.logTail = m.logTail[len(m.logTail)-maxLogLines:]
-	}
-}
-
 // earnedSince totals the payments that landed after a moment. Entries with an
 // unparseable timestamp are left out rather than guessed at — a receipt that
 // cannot be placed in time should not inflate "today".
@@ -647,40 +504,4 @@ func (m *Model) earnedSince(cutoff time.Time) (int64, int) {
 		count++
 	}
 	return total, count
-}
-
-// runningJobs counts the work this node has in flight, which is what the tab
-// strip badges and what a provider deciding whether to pause wants to know.
-func (m *Model) runningJobs() int {
-	var live int
-	for _, job := range m.jobs {
-		if !job.Status.IsTerminal() {
-			live++
-		}
-	}
-	return live
-}
-
-// sortedJobs orders the table: live work first, then most recent.
-func sortedJobs(states []runner.State) []runner.State {
-	sort.SliceStable(states, func(i, j int) bool {
-		iLive := !states[i].Status.IsTerminal()
-		jLive := !states[j].Status.IsTerminal()
-		if iLive != jLive {
-			return iLive
-		}
-		return startTime(states[i]).After(startTime(states[j]))
-	})
-	return states
-}
-
-func startTime(state runner.State) time.Time {
-	if state.StartedAt == nil {
-		return time.Time{}
-	}
-	parsed, err := time.Parse(time.RFC3339, *state.StartedAt)
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed
 }

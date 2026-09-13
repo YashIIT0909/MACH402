@@ -1,18 +1,17 @@
 /**
  * An ephemeral SSH keypair generated in the browser.
  *
- * `POST /v1/leases` requires a public key: the node signs it into a certificate
+ * `POST /v1/sessions` requires a public key: the node signs it into a certificate
  * scoped to one lease and never sees the private half (CLAUDE.md invariant 7).
  * That rule does not soften for a browser renter, so a page has to produce a
  * real keypair rather than send a placeholder — which is why this exists
  * instead of the node making SSH optional.
  *
- * What the browser can and cannot do with it is worth being clear about. It can
- * generate the key and receive the certificate. It cannot *use* them: reaching
- * a lease over SSH means `cloudflared access ssh` as a ProxyCommand, which is a
- * local binary, not something a page can drive. So the browser's own session is
- * the Jupyter one, and the key and certificate exist to be downloaded by a
- * renter who wants a terminal — the same material the CLI would have made.
+ * What the browser does with it is worth being clear about. It generates the
+ * key and sends the public half, because a lease is issued against one. It never
+ * uses the key or the certificate that comes back: leases are published through
+ * a quick tunnel, which carries HTTP only, so there is no SSH route and the
+ * renter's access is the Jupyter server.
  */
 
 /** The OpenSSH wire name for the only algorithm generated here. */
@@ -22,7 +21,7 @@ const SSH_ED25519 = "ssh-ed25519";
  * The slice of WebCrypto this needs, declared structurally.
  *
  * `SubtleCrypto` is a DOM type and this package compiles without DOM lib on
- * purpose — the CLI shares it, and pulling DOM in would let node-side code
+ * purpose — node-side modules share it, and pulling DOM in would let them
  * reach for browser globals that are not there. Declaring the two methods used
  * keeps the boundary honest and makes the dependency injectable, so node's
  * `webcrypto.subtle` satisfies it in a test exactly as the browser's does.
@@ -50,8 +49,8 @@ export type BrowserSSHKeypair = {
  *
  * Ed25519 rather than RSA because it is the one algorithm here whose OpenSSH
  * public-key encoding is short enough to be worth doing by hand, and it is what
- * `ssh-keygen -t ed25519` produces on the CLI path, so a provider sees the same
- * kind of key from either renter.
+ * `ssh-keygen -t ed25519` produces, so a provider sees the same kind of key a
+ * terminal user would bring.
  */
 export async function generateSSHKeypair(subtle: SubtleCryptoLike): Promise<BrowserSSHKeypair> {
   const pair = (await subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as {

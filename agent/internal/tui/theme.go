@@ -235,7 +235,7 @@ func orNone(value string) string {
 }
 
 // short clips an identifier to its first eight characters, which is enough to
-// tell this node's jobs apart without spending a column on the rest.
+// tell this node's leases apart without spending a column on the rest.
 func short(id string) string {
 	if len(id) <= 8 {
 		return id

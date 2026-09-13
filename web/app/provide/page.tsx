@@ -13,7 +13,7 @@ const requirements = [
   {
     number: "01",
     title: "Docker, and your user in the docker group",
-    body: "The daemon talks to Docker over its unix socket to create the sandbox each job runs in. Setup preflights this, so a permissions problem surfaces now rather than during someone's paid job.",
+    body: "The daemon talks to Docker over its unix socket to create the container each session runs in. Setup preflights this, so a permissions problem surfaces now rather than during someone's paid session.",
   },
   {
     number: "02",
@@ -29,6 +29,11 @@ const requirements = [
     number: "04",
     title: "The NVIDIA Container Toolkit, for an actual GPU",
     body: "Without it the node still runs, in CPU-fallback mode, and says so in its listing. A card the daemon cannot pass through is a card you cannot sell, so it is never advertised as one.",
+  },
+  {
+    number: "05",
+    title: "pnpm, and a few testnet HBAR for the operator key",
+    body: "The installer builds a small signing sidecar with pnpm and creates an operator key on this machine. It publishes what the node owes renters to your own audit topic and pays their refunds, so setup waits while you fund it. It is not your payout account and never touches your earnings.",
   },
 ];
 

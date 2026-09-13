@@ -21,7 +21,7 @@ func newTUICommand() *cobra.Command {
 		Use:   "tui",
 		Short: "Run the node with a live dashboard",
 		Long: "Serves exactly what `serve` serves, with a terminal dashboard on top: " +
-			"payments as they settle, jobs as they run, and GPU utilisation.\n\n" +
+			"payments as they settle, the session running now, and GPU utilisation.\n\n" +
 			"`serve` remains the right command for a machine running under systemd. " +
 			"This is for a provider watching their own box.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -49,7 +49,7 @@ func runTUI(parent context.Context, configPath string) error {
 	// The same assembly `serve` uses, deliberately — including the leasing
 	// wiring and the lease sweep. Building a second one here by hand is what
 	// previously left the dashboard serving a node that answered 404 on
-	// /v1/leases however the provider had configured it. See node.go.
+	// /v1/sessions however the provider had configured it. See node.go.
 	n, err := buildNode(ctx, configPath, log)
 	if err != nil {
 		return err
@@ -104,4 +104,3 @@ func runTUI(parent context.Context, configPath string) error {
 	}
 	return nil
 }
-

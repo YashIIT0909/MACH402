@@ -16,8 +16,8 @@ import { PaymentError } from "@cleargate/client/browser";
  * extension-cancelled request, a DNS failure and a dropped connection, and this
  * code cannot tell those apart — so it no longer pretends to.
  *
- * Shared by `LeaseFlow` and `SessionFlow`: both pay the same way and fail the
- * same way, so there is exactly one place that decides what a renter reads.
+ * Kept apart from `SessionFlow` so there is exactly one place that decides what
+ * a renter reads when a payment or a node call fails.
  */
 export function describe(caught: unknown): string {
   if (caught instanceof PaymentError) {

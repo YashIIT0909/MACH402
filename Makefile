@@ -30,7 +30,7 @@ LEASE_BASE_IMAGE ?= $(shell docker info --format '{{if index .Runtimes "nvidia"}
 #   make lease-image LEASE_BASE_IMAGE=tensorflow/tensorflow:2.17.0-gpu
 LEASE_EXTRA_PIP  ?=
 
-.PHONY: help install smoke smoke-agent supported agent lease-image dev-node dev-tui cli dev-client \
+.PHONY: help install smoke supported agent lease-image dev-node dev-tui \
         registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean \
         contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register
 
@@ -46,9 +46,6 @@ supported: ## check the facilitator advertises hedera:testnet
 smoke: ## end-to-end payment test against testnet — run before every PR
 	pnpm --filter @cleargate/smoke run smoke
 
-smoke-agent: ## pay the local Go agent with the official TS client (cross-verification gate)
-	pnpm --filter @cleargate/smoke exec tsx src/run.ts http://localhost:8402/v1/jobs
-
 agent: ## build the cleargate-node binary
 	cd agent && go build -ldflags "$(LDFLAGS)" -o ../$(BIN) ./cmd/cleargate-node
 
@@ -63,12 +60,6 @@ dev-node: agent ## run an agent locally, headless — what a real provider runs 
 
 dev-tui: agent ## run an agent locally with the provider dashboard
 	./$(BIN) tui
-
-cli: ## renter CLI, run from the repo root: make cli ARGS="quote -n http://localhost:8402"
-	pnpm exec cleargate $(ARGS)
-
-dev-client: ## show the renter CLI's help
-	pnpm exec cleargate --help
 
 registry-db: ## start the registry's Postgres in docker
 	cd registry && docker compose up -d
