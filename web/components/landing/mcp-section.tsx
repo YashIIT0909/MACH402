@@ -50,10 +50,13 @@ const transcript = [
   { kind: "call", text: "get_node_quote", detail: "3334 tinybars/s", pays: false },
   { kind: "call", text: "open_session", detail: "1000200 tinybars", pays: true },
   { kind: "result", text: "sess_9f2c", detail: "jupyter ready · 300s credit" },
+  { kind: "call", text: "top_up_session", detail: "1000200 tinybars", pays: true },
+  { kind: "call", text: "stop_session", detail: "after 7 min", pays: false },
+  { kind: "result", text: "refunded", detail: "600120 tinybars" },
   {
     kind: "agent",
     text:
-      "Running. That bought the first five minutes of the ten — I'll top up as it burns, and whatever is left when I stop comes back to you.",
+      "Done. The first payment bought five minutes and one top-up bought the rest; the three minutes I didn't use came back to you.",
   },
 ] as const;
 
@@ -100,7 +103,7 @@ export function McpSection() {
          * developer panel needs it: the transcript's longest mono line would
          * otherwise size the phone column past the viewport.
          */}
-        <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-12 lg:grid-cols-2 lg:gap-16">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-2 lg:gap-16">
           <div data-reveal className="min-w-0">
             <Eyebrow className="mb-5">Model Context Protocol</Eyebrow>
             <h2 className="mb-5 type-title">
@@ -113,7 +116,7 @@ export function McpSection() {
               secret is your own Hedera key, and it never leaves your machine.
             </p>
 
-            <div className="mb-8 border border-foreground/10">
+            <div className="border border-foreground/10">
               <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-5 py-2.5">
                 <span className="type-label text-muted-foreground">Wire it up</span>
                 <Button
@@ -147,14 +150,16 @@ export function McpSection() {
                 </span>
               </pre>
             </div>
-
-            <ToolsHint />
           </div>
 
-          <div data-reveal className="min-w-0">
-            <div className="border border-foreground/10">
+          {/*
+           * Stretched to the text column's height, so the two columns end on the
+           * same line instead of leaving an empty patch under the terminal.
+           */}
+          <div data-reveal className="flex min-w-0 flex-col">
+            <div className="flex flex-1 flex-col border border-foreground/10">
               <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-5 py-3">
-                <span className="type-label text-muted-foreground">agent · mcp</span>
+                <ToolsHint />
                 <span className="inline-flex items-center gap-2 type-label text-[0.6rem] text-accent">
                   <span className="h-1.5 w-1.5 rounded-full bg-accent">
                     <span className="sr-only">live</span>
@@ -172,13 +177,13 @@ export function McpSection() {
                * breakpoint — the agent's closing line wraps to three lines in
                * one column and four in another.
                */}
-              <div className="relative bg-foreground/[0.02] p-6 font-mono text-sm">
-                <div aria-hidden="true" className="invisible space-y-3">
+              <div className="relative flex-1 bg-foreground/[0.02] p-6 font-mono text-sm">
+                <div aria-hidden="true" className="invisible space-y-4">
                   {transcript.map((line, index) => (
                     <TranscriptRow key={index} line={line} measuring />
                   ))}
                 </div>
-                <div className="absolute inset-0 space-y-3 overflow-hidden p-6">
+                <div className="absolute inset-0 space-y-4 overflow-hidden p-6">
                   {transcript.slice(0, shown).map((line, index) => (
                     <TranscriptRow key={index} line={line} />
                   ))}
@@ -193,17 +198,16 @@ export function McpSection() {
 }
 
 /*
- * The tool list, folded behind the "i" that names it.
+ * The terminal's title, with the tool list folded behind the "i" beside it.
  *
- * Seven rows of identifiers is reference material, not an argument: it told a
- * first-time reader nothing the sentence above it had not already said, and it
- * was most of this column's height. On hover, and on keyboard focus — the
- * button is real and focusable, so the list is not mouse-only.
+ * Seven rows of identifiers is reference material rather than an argument, so
+ * it stays out of the column until asked for — on hover, or on keyboard focus,
+ * since the button is real and focusable.
  */
 function ToolsHint() {
   return (
-    <div className="group relative inline-flex items-center gap-3">
-      <span className="type-label text-muted-foreground">Seven tools</span>
+    <div className="group relative flex items-center gap-3">
+      <span className="type-label text-muted-foreground">agent · mcp</span>
       <button
         type="button"
         aria-label="List the seven tools"
@@ -213,27 +217,38 @@ function ToolsHint() {
       </button>
 
       {/*
-       * `bg-panel`, not a translucent ground: this floats over the page's live
-       * backdrop, and anything see-through here puts moving green behind mono
-       * text. `pointer-events-none` so the panel cannot swallow the hover that
-       * is holding it open.
+       * Opens downward over the transcript, anchored to the title it belongs
+       * to. The top padding is a hover bridge, so moving the pointer from the
+       * button into the card does not close it.
        *
-       * It opens upward: this sits at the end of the column, and the section
-       * clips its own overflow, so a panel hanging below would be cut off by
-       * the section's bottom edge.
+       * `bg-panel` rather than a translucent ground: the page has a live
+       * backdrop, and anything see-through here puts moving green behind mono
+       * text.
        */}
-      <div className="pointer-events-none absolute bottom-full left-0 z-10 w-max max-w-[22rem] pb-3 opacity-0 transition-opacity ease-brand dur-base group-hover:opacity-100 group-focus-within:opacity-100">
-        <div className="border border-foreground/15 bg-panel px-5 py-3 shadow-lg shadow-black/40">
-          <ul className="grid grid-cols-2 gap-x-8">
+      <div className="pointer-events-none absolute top-full left-0 z-20 w-[min(22rem,calc(100vw-4rem))] translate-y-1 pt-3 opacity-0 transition-[opacity,translate] ease-brand dur-base group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:translate-y-0 group-hover:opacity-100">
+        <div className="border border-foreground/15 bg-panel shadow-xl shadow-black/50">
+          <div className="flex items-center justify-between gap-4 border-b border-foreground/10 px-4 py-2.5">
+            <span className="type-label text-muted-foreground">Seven tools</span>
+            <span className="flex items-center gap-4 type-label text-[0.6rem] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                pays
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full border border-foreground/40" />
+                free
+              </span>
+            </span>
+          </div>
+          <ul className="divide-y divide-foreground/10">
             {tools.map((tool) => (
-              <li
-                key={tool.name}
-                className="flex items-baseline justify-between gap-4 border-b border-foreground/10 py-1.5 last:border-b-0 [&:nth-last-child(2)]:border-b-0"
-              >
-                <span className="font-mono text-[0.8rem] text-foreground/85">{tool.name}</span>
+              <li key={tool.name} className="flex items-center justify-between gap-6 px-4 py-2.5">
+                <span className="font-mono text-sm text-foreground">{tool.name}</span>
                 {/* The one thing a name does not say: whether it can spend. */}
-                <span className={`type-label text-[0.55rem] ${tool.pays ? "text-accent" : "text-muted-foreground/50"}`}>
-                  {tool.pays ? "pays" : "free"}
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${tool.pays ? "bg-accent" : "border border-foreground/40"}`}
+                >
+                  <span className="sr-only">{tool.pays ? "pays" : "free"}</span>
                 </span>
               </li>
             ))}

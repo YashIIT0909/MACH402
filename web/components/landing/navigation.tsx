@@ -4,8 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { Button } from "@/components/ui/button";
-import { Eyebrow } from "@/components/landing/primitives";
 
 /**
  * The site chrome: a vertical navigation that is hidden until it is asked for.
@@ -270,11 +268,7 @@ export function Navigation() {
         {/* The same emphasis wash the how-it-works band uses, at the same opacity. */}
         <div className="hatch pointer-events-none absolute inset-0 opacity-[0.035]" />
 
-        <div className="relative flex items-center justify-between px-6 pt-7 pb-6">
-          <Link href="/" onClick={() => setOpen(false)} className="flex items-baseline gap-2">
-            <span className="type-wordmark">ClearGate</span>
-            <span className="type-label text-muted-foreground">testnet</span>
-          </Link>
+        <div className="relative flex items-center justify-end px-6 pt-7 pb-4">
           <button
             type="button"
             onClick={() => setOpen(false)}
@@ -290,11 +284,14 @@ export function Navigation() {
          * either end from chaining into the page behind it.
          */}
         <div className="nav-scroll relative flex-1 overflow-y-auto overscroll-contain px-6">
-          <div className="py-5">
-            <Eyebrow>On this page</Eyebrow>
-          </div>
-
-          <ul>
+          {/*
+           * No headings over the two lists: the page sections carry numerals and
+           * the destinations carry dots, and a heavier rule between them is
+           * enough to read them as two groups. The rule sits in the middle of
+           * its gap — the last section drops its own hairline and the space
+           * above and below the rule is the same.
+           */}
+          <ul className="border-t border-foreground/10 [&>li:last-child>*]:border-b-0">
             {SECTIONS.map((section, i) => {
               const current = onLanding && i === index;
               const body = <SectionRow number={i + 1} name={section.name} current={current} />;
@@ -323,11 +320,7 @@ export function Navigation() {
             })}
           </ul>
 
-          <div className="pt-10 pb-5">
-            <Eyebrow>Elsewhere</Eyebrow>
-          </div>
-
-          <ul className="pb-6">
+          <ul className="mt-5 border-t border-foreground/25 pt-5 pb-6">
             {ROUTES.map((route) => (
               <li key={route.href}>
                 <Link
@@ -358,14 +351,6 @@ export function Navigation() {
             ))}
           </ul>
         </div>
-
-        <div className="relative border-t border-foreground/10 p-6">
-          <Button asChild size="lg" className="w-full">
-            <Link href="/provide" onClick={() => setOpen(false)}>
-              List your GPU
-            </Link>
-          </Button>
-        </div>
       </nav>
     </>
   );
@@ -392,7 +377,7 @@ function SectionRow({
       }`}
     >
       <span
-        className={`type-nav transition-colors ease-brand dur-slow ${
+        className={`type-nav w-[calc(var(--tk)*0.9)] shrink-0 transition-colors ease-brand dur-slow ${
           current ? "text-accent" : "text-foreground/30"
         }`}
       >
@@ -431,7 +416,7 @@ function DestinationRow({
         current ? "opacity-100" : "opacity-45 group-hover:opacity-80"
       }`}
     >
-      <span className="type-nav w-[2ch] text-foreground/20" aria-hidden="true">
+      <span className="type-nav w-[calc(var(--tk)*0.9)] shrink-0 text-foreground/20" aria-hidden="true">
         ·
       </span>
       <span className="type-nav flex-1 transition-transform ease-brand dur-base group-hover:translate-x-1.5 motion-reduce:transition-none">

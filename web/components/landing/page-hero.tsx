@@ -41,7 +41,13 @@ export function PageHero({
         ))}
       </div>
 
-      <div className={`relative z-10 pt-40 pb-20 lg:pt-48 lg:pb-28 ${CONTAINER}`}>
+      {/*
+       * The bottom padding is sized for a lede. Without one, the same padding
+       * would leave an empty band under the title, so it tightens instead.
+       */}
+      <div
+        className={`relative z-10 pt-40 lg:pt-48 ${children ? "pb-20 lg:pb-28" : "pb-12 lg:pb-16"} ${CONTAINER}`}
+      >
         {/*
          * The shared Eyebrow, not a hand-rolled copy of it: this band opens
          * /nodes and /provide, and a small mono label here beside the Ticketing
