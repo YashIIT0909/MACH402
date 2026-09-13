@@ -105,6 +105,16 @@ func (s *Server) sweepLeases(ctx context.Context) {
 	leases := s.cfg.Leases
 	switch lease.Status() {
 	case runner.LeaseActive:
+		// A session paid for in full ends as soon as its credit is used: no
+		// top-up is coming, so freezing it would only hold the machine for
+		// nothing.
+		if lease.FullyPaid() && lease.SecondsRemaining() == 0 {
+			s.log.Info("session used the time it was bought for; ending it", "lease", lease.ID)
+			s.runner.StopLease(ctx, lease, runner.LeaseExpired)
+			s.tunnel.Clear(ctx)
+			s.settleSession(ctx, lease)
+			return
+		}
 		if lease.OverdueBy() < sessionFreezeGrace {
 			return
 		}

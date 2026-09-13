@@ -213,6 +213,42 @@ func TestEarnedPlusOwedAlwaysEqualsPaidIn(t *testing.T) {
 	check("after a tick following a top-up")
 }
 
+// The length a renter picks is the length they pay for: top-ups are asked for
+// until it is covered, and never after.
+func TestAFullyPaidSessionStopsAskingForTopUps(t *testing.T) {
+	server := meterServer(&recordingAudit{})
+
+	// 100 tinybars a second; a 600-second session opened with one 300-second chunk.
+	lease := runner.NewMeteredLeaseForTest("lease1", "0xsess", "0.0.999", big.NewInt(100), big.NewInt(30_000))
+	lease.SetSessionLength(600)
+
+	if lease.FullyPaid() {
+		t.Fatal("half of a session is not fully paid")
+	}
+	if got := lease.UnpaidSeconds(); got != 300 {
+		t.Fatalf("unpaid = %ds, want 300s", got)
+	}
+
+	runner.RewindMeterForTest(lease, 250)
+	server.tickMeter(lease)
+	if !server.lowCredits(lease) {
+		t.Fatal("50s left on a session that is not yet paid for must ask for the next chunk")
+	}
+
+	lease.AddCredit(big.NewInt(30_000))
+	if !lease.FullyPaid() || lease.UnpaidSeconds() != 0 {
+		t.Fatalf("two 300s chunks cover a 600s session: fully_paid=%v unpaid=%d",
+			lease.FullyPaid(), lease.UnpaidSeconds())
+	}
+
+	runner.RewindMeterForTest(lease, 330)
+	server.tickMeter(lease)
+	if server.lowCredits(lease) {
+		t.Errorf("a fully paid session with %ds left asked for a top-up; it must end when its time is used",
+			lease.SecondsRemaining())
+	}
+}
+
 func mustInt(t *testing.T, s string) *big.Int {
 	t.Helper()
 	value, ok := new(big.Int).SetString(s, 10)

@@ -62,6 +62,10 @@ type sessionResponse struct {
 	CreditTinybars         string `json:"credit_tinybars"`
 	LowCredits             bool   `json:"low_credits"`
 	Seconds                int    `json:"seconds"`
+	// SessionSeconds is the session length the renter chose; FullyPaid is
+	// whether every chunk of it has been bought.
+	SessionSeconds int  `json:"session_seconds"`
+	FullyPaid      bool `json:"fully_paid"`
 }
 
 // handleCreateSession sells interactive time as a metered, refundable credit.
@@ -205,6 +209,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lease.MarkMetered(sessionID, settlement.Payer, price, credit)
+	// The length the renter chose is the length the session runs for: top-ups
+	// buy the rest of it in chunks, and stop once it is paid for.
+	lease.SetSessionLength(int64(spec.Seconds))
 
 	s.recordSessionPayment(lease, settlement, requirements, hcs.KindSessionOpen)
 
@@ -231,6 +238,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		CreditTinybars:         lease.Credit().String(),
 		LowCredits:             s.lowCredits(lease),
 		Seconds:                int(lease.SecondsRemaining()),
+		SessionSeconds:         spec.Seconds,
+		FullyPaid:              lease.FullyPaid(),
 	})
 }
 
@@ -255,18 +264,30 @@ func (s *Server) handleTopUpSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chunkSeconds := s.cfg.Leases.SessionChunkSeconds
-
-	// The node's own total cap, checked before the renter is asked to pay so a
-	// chunk that would exceed it is refused for free.
-	maxTotal := s.cfg.Leases.MaxTotalMinutes * 60
 	price := lease.PricePerSecond()
 	if price.Sign() <= 0 {
 		writeError(w, http.StatusConflict, "this session has no meter; it cannot be topped up")
 		return
 	}
-	bought := new(big.Int).Add(lease.Burned(), lease.Credit())
-	boughtSeconds := new(big.Int).Div(bought, price).Int64()
+
+	// A top-up buys the next chunk of the session the renter chose, and never
+	// more than is left of it.
+	chunkSeconds := s.cfg.Leases.SessionChunkSeconds
+	if lease.SessionLength() > 0 {
+		unpaid := lease.UnpaidSeconds()
+		if unpaid <= 0 {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"this session was bought for %d seconds and is already paid for in full; it ends when "+
+					"that time is used — start a new session to keep going", lease.SessionLength()))
+			return
+		}
+		chunkSeconds = int(min(int64(chunkSeconds), unpaid))
+	}
+
+	// The node's own total cap, checked before the renter is asked to pay so a
+	// chunk that would exceed it is refused for free.
+	maxTotal := s.cfg.Leases.MaxTotalMinutes * 60
+	boughtSeconds := lease.PaidSeconds()
 	if boughtSeconds+int64(chunkSeconds) > int64(maxTotal) {
 		writeError(w, http.StatusConflict,
 			fmt.Sprintf("this node caps a session at %d seconds total; %d have been bought already",
@@ -612,6 +633,11 @@ func (s *Server) validateSessionSeconds(seconds int) error {
 // bigger than the sweep interval plus a payment round trip — numbers the node
 // knows and a client would have to guess.
 func (s *Server) lowCredits(lease *runner.Lease) bool {
+	// A session paid for in full has nothing left to buy: it ends when its
+	// credit is used rather than being topped up past the length chosen.
+	if lease.FullyPaid() {
+		return false
+	}
 	return lease.SecondsRemaining() < int64(s.cfg.Leases.LowCreditThresholdSeconds)
 }
 
@@ -629,7 +655,9 @@ func (s *Server) sessionState(lease *runner.Lease) map[string]any {
 		"created_at":                base.CreatedAt,
 		"expires_at":                base.ExpiresAt,
 		"seconds_remaining":         lease.SecondsRemaining(),
-		"paid_seconds":              base.PaidMinutes * 60,
+		"paid_seconds":              lease.PaidSeconds(),
+		"session_seconds":           lease.SessionLength(),
+		"fully_paid":                lease.FullyPaid(),
 		"gpu":                       base.GPU,
 		"price_tinybars_per_second": lease.PricePerSecond().String(),
 		"credit_tinybars":           lease.Credit().String(),

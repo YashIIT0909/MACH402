@@ -126,6 +126,11 @@ type Lease struct {
 	// sessionID is the session's key; empty only between provisioning and the
 	// opening chunk settling.
 	sessionID string
+	// sessionSeconds is the session length the renter chose. Credit is still
+	// bought in chunks of at most leases.session_chunk_seconds; this is what
+	// those chunks add up to, and the session ends once it has been used.
+	// Zero means no length was set.
+	sessionSeconds int64
 	// payer is the Hedera account the facilitator confirmed paid for this
 	// session. It is where a refund goes, so it comes from the settlement
 	// rather than from anything the renter asserted in a request body.
@@ -332,6 +337,56 @@ func (l *Lease) SecondsRemaining() int64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.secondsRemainingLocked()
+}
+
+// SetSessionLength records the session length the renter chose, in seconds.
+func (l *Lease) SetSessionLength(seconds int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sessionSeconds = seconds
+}
+
+// SessionLength is the session length the renter chose, or 0 if none was set.
+func (l *Lease) SessionLength() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.sessionSeconds
+}
+
+// PaidSeconds is how much time every payment so far has bought: burned plus
+// unburned credit, at the session's rate.
+func (l *Lease) PaidSeconds() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.paidSecondsLocked()
+}
+
+func (l *Lease) paidSecondsLocked() int64 {
+	if l.credit == nil || l.burned == nil || l.pricePerSecond == nil || l.pricePerSecond.Sign() <= 0 {
+		return 0
+	}
+	total := new(big.Int).Add(l.burned, l.credit)
+	return new(big.Int).Div(total, l.pricePerSecond).Int64()
+}
+
+// UnpaidSeconds is how much of the chosen session length is still to be
+// bought. Zero once it is paid in full, and on a session with no length set.
+func (l *Lease) UnpaidSeconds() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.sessionSeconds <= 0 {
+		return 0
+	}
+	return max(l.sessionSeconds-l.paidSecondsLocked(), 0)
+}
+
+// FullyPaid reports whether the renter has paid for the whole session length
+// they chose. A fully paid session is not topped up again: it ends when its
+// credit is used.
+func (l *Lease) FullyPaid() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.sessionSeconds > 0 && l.paidSecondsLocked() >= l.sessionSeconds
 }
 
 // Credit is what the node owes back if the session stopped right now.
