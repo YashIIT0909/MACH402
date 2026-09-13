@@ -31,10 +31,10 @@ LEASE_BASE_IMAGE ?= $(shell docker info --format '{{if index .Runtimes "nvidia"}
 LEASE_EXTRA_PIP  ?=
 
 .PHONY: help install smoke smoke-agent supported agent lease-image dev-node dev-tui cli dev-client \
-        registry-db dev-registry dev-registry-sample dev-web mcp-server typecheck vet test clean \
+        registry-db dev-registry registry-up dev-registry-sample dev-web mcp-server typecheck vet test clean \
         contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register
 .PHONY: help install smoke supported agent lease-image dev-node dev-tui \
-        registry-db dev-registry dev-registry-sample dev-web typecheck vet test clean \
+        registry-db dev-registry registry-up dev-registry-sample dev-web typecheck vet test clean \
         contracts contracts-test contracts-deploy contracts-demo escrow-selectors node-register \
         deploy-registry deploy-web
 
@@ -65,11 +65,21 @@ dev-node: agent ## run an agent locally, headless — what a real provider runs 
 dev-tui: agent ## run an agent locally with the provider dashboard
 	./$(BIN) tui
 
+# --wait holds until the healthcheck passes. `up -d` alone returns as soon as the
+# container is running, which is a few seconds before Postgres accepts a
+# connection — long enough for a registry started right behind it to die on
+# ECONNREFUSED in migrate().
 registry-db: ## start the registry's Postgres in docker
-	cd registry && docker compose up -d
+	cd registry && docker compose up -d --wait
 
 dev-registry: ## run the discovery registry on :4400
 	pnpm --filter @cleargate/registry run start
+
+# Sub-makes rather than prerequisites: prerequisites are unordered under `make
+# -j`, and here the database has to be up before the registry migrates.
+registry-up: ## Postgres and then the registry, in one command
+	$(MAKE) registry-db
+	$(MAKE) dev-registry
 
 dev-registry-sample: ## serve fixture nodes on :4400 for website work — no Postgres, no heartbeats
 	node scripts/sample-registry.mjs
