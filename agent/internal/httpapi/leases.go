@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
-	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/hcs"
+	"github.com/YashIIT0909/MACH402/agent/internal/receipts"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/tunnel"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 // The machinery every metered session runs on: the container behind it is a

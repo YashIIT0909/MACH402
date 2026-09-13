@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
+	"github.com/YashIIT0909/MACH402/agent/internal/nodespec"
 )
 
 // agentCard is what an ERC-8004 agent id resolves to.
@@ -16,7 +16,7 @@ import (
 // the domain points here, and this is served by the provider themselves.
 //
 // So the resolution path is: agent id -> agentDomain -> this card -> the same
-// spec a renter reads before paying. ClearGate's registry appears nowhere in
+// spec a renter reads before paying. MACH402's registry appears nowhere in
 // that chain, which is the entire reason for putting identity on-chain rather
 // than in another Postgres column.
 type agentCard struct {
@@ -104,12 +104,12 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) agentCardFrom(spec nodespec.Spec) agentCard {
 	card := agentCard{
 		ProtocolVersion: "0.3.0",
-		Name:            "ClearGate node " + s.cfg.NodeID,
+		Name:            "MACH402 node " + s.cfg.NodeID,
 		Description:     describeNode(spec),
 		URL:             strings.TrimRight(s.cfg.PublicURL, "/"),
 		Version:         s.version,
 		Provider: cardProvider{
-			Organization: "ClearGate",
+			Organization: "MACH402",
 			URL:          s.cfg.RegistryURL,
 		},
 		Capabilities: cardCapabilities{
@@ -169,7 +169,7 @@ func describeNode(spec nodespec.Spec) string {
 	return "CPU sessions, billed by the second and settled on Hedera."
 }
 
-// caip2For maps ClearGate's network string to the CAIP-2 chain id an agent
+// caip2For maps MACH402's network string to the CAIP-2 chain id an agent
 // outside this project would recognise.
 func caip2For(network string) string {
 	switch network {

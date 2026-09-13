@@ -1,4 +1,4 @@
-module github.com/YashIIT0909/ClearGate/agent
+module github.com/YashIIT0909/MACH402/agent
 
 go 1.25
 

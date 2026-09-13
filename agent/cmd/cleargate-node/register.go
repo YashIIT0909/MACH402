@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
 )
 
 // newRegisterCommand registers this node's ERC-8004 identity.
@@ -28,7 +28,7 @@ func newRegisterCommand() *cobra.Command {
 		Short: "Register this node's on-chain provider identity (ERC-8004)",
 		Long: "Registers this node as an agent in the ERC-8004 identity registry on Hedera, " +
 			"giving it a persistent id that a renter's agent can resolve independently of " +
-			"ClearGate's own registry.\n\n" +
+			"MACH402's own registry.\n\n" +
 			"Safe to re-run: if this node already has an identity it is reported rather than " +
 			"replaced. Registering twice would orphan the first id.",
 		RunE: func(cmd *cobra.Command, _ []string) error {

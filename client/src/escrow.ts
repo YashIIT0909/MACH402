@@ -1,7 +1,7 @@
 /**
  * Renter-side calls to the SessionEscrow contract.
  *
- * This is the second place in ClearGate that signs a Hedera transaction, beside
+ * This is the second place in MACH402 that signs a Hedera transaction, beside
  * `payment.ts`, and it holds to the same rule: all payment signing lives in
  * `client/`, in TypeScript, on the renter's own machine (CLAUDE.md invariants 1
  * and 2). A `ContractExecuteTransaction` is signed exactly where and how a

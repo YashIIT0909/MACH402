@@ -43,7 +43,7 @@ export function FooterSection() {
           <div className="grid grid-cols-2 gap-8 md:grid-cols-6 lg:gap-8">
             <div className="col-span-2">
               <Link href="/" className="mb-4 inline-flex items-center gap-2">
-                <span className="type-wordmark">ClearGate</span>
+                <span className="type-wordmark">MACH402</span>
                 <span className="type-label text-muted-foreground">
                   testnet
                 </span>

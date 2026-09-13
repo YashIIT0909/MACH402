@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 /**
  * SessionEscrow — trustless, time-metered payment for one rented GPU session.
  *
- * Why this exists: ClearGate's lease flow settles a lump sum the moment a lease
+ * Why this exists: MACH402's lease flow settles a lump sum the moment a lease
  * starts, so stopping early forfeits the remainder. Refunding that without a
  * contract would mean the provider's node holding a key on the renter's behalf,
  * which is exactly the custodial model the project rejects. Here the renter's
@@ -49,7 +49,7 @@ contract SessionEscrow {
      *
      * So this contract does no unit conversion at all. Every amount below —
      * `pricePerSecond`, `deposited`, `msg.value`, and the values sent back
-     * out — is tinybars, which is also the unit every price in ClearGate is
+     * out — is tinybars, which is also the unit every price in MACH402 is
      * already quoted in.
      */
     struct Session {

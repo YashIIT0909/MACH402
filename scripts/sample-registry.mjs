@@ -26,7 +26,7 @@ const daysAgo = (days) => new Date(now - days * 86_400_000).toISOString();
 /**
  * One row per node, in the shape `NodeListing` from packages/types.
  *
- * Prices are strings in tinybars, never numbers: the rest of ClearGate treats
+ * Prices are strings in tinybars, never numbers: the rest of MACH402 treats
  * amounts as strings end to end and the browse page is no exception.
  */
 const NODES = [

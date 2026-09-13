@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const [deployer] = await ethers.getSigners();
   if (!deployer) {
     throw new Error(
-      "no signer: set HEDERA_PRIVATE_KEY in ClearGate/.env to a funded testnet ECDSA key",
+      "no signer: set HEDERA_PRIVATE_KEY in MACH402/.env to a funded testnet ECDSA key",
     );
   }
 

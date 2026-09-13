@@ -18,12 +18,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
-	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/escrow"
+	"github.com/YashIIT0909/MACH402/agent/internal/hedera"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/sshca"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 func newSetupCommand() *cobra.Command {
@@ -114,7 +114,7 @@ func setup(ctx context.Context, opts setupOptions) error {
 	}
 
 	cfg := config.Default()
-	// Always on: every ClearGate node sells GPU time. Whether the card can
+	// Always on: every MACH402 node sells GPU time. Whether the card can
 	// actually be passed through is still checked below, and at every start.
 	cfg.GPUEnabled = true
 	cfg.Leases.Enabled = true
@@ -388,7 +388,7 @@ func newRegistryToken() string {
 // should fail here, while a provider is watching and can act on it, rather than
 // in the middle of someone else's paid session.
 //
-// This is the first and only place ClearGate writes key material to a
+// This is the first and only place MACH402 writes key material to a
 // provider's disk. It is worth being clear about what that key is and is not:
 // it pays its own fees and signs topic messages and contract calls, and it is
 // NOT pay_to. Earnings accumulate in pay_to, which still signs nothing, so a
@@ -510,7 +510,7 @@ func preflightHedera(ctx context.Context, cfg *config.Config) (bool, error) {
 
 	if cfg.HCS.Enabled && cfg.HCS.TopicID == "" {
 		topicCtx, cancelTopic := context.WithTimeout(ctx, 60*time.Second)
-		topicID, err := sidecar.CreateTopic(topicCtx, "ClearGate node "+cfg.NodeID)
+		topicID, err := sidecar.CreateTopic(topicCtx, "MACH402 node "+cfg.NodeID)
 		cancelTopic()
 		if err != nil {
 			return false, fmt.Errorf("  hcs: could not create the audit topic: %w", err)

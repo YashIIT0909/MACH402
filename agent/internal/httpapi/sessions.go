@@ -12,10 +12,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
-	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/escrow"
+	"github.com/YashIIT0909/MACH402/agent/internal/hcs"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 // maxSessionSpecBytes bounds the request body, like the lease spec it mirrors.
@@ -591,7 +591,7 @@ func (s *Server) sessionChunk(requested int) int {
 // the chunk rather than the session the renter asked for, because the chunk is
 // what this particular payment buys.
 func (s *Server) sessionDescription(seconds int) string {
-	return fmt.Sprintf("%d seconds of metered, refundable GPU time on ClearGate node %s",
+	return fmt.Sprintf("%d seconds of metered, refundable GPU time on MACH402 node %s",
 		seconds, s.cfg.NodeID)
 }
 

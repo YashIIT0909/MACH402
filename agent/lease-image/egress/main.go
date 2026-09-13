@@ -1,6 +1,6 @@
 // Command cleargate-egress is the only way out of a lease container's network.
 //
-// Batch jobs on ClearGate get no network at all: the node downloads a renter's
+// Batch jobs on MACH402 get no network at all: the node downloads a renter's
 // dataset itself and mounts it, and the container never has a route anywhere.
 // A lease cannot work that way — a renter with a shell has to be able to
 // install a package — so the containment moves from "no network" to "one

@@ -1,4 +1,4 @@
-// Command cleargate-node is the ClearGate provider daemon: an x402 resource
+// Command cleargate-node is the MACH402 provider daemon: an x402 resource
 // server that sells GPU time and runs containers for whoever pays.
 //
 // It never holds a private key and never links a Hedera SDK. The merchant side

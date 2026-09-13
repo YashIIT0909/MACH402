@@ -137,7 +137,7 @@ export function Navigation() {
   }, []);
 
   const routeLabel = ROUTES.find((route) => pathname.startsWith(route.href))?.name;
-  const labels = onLanding ? SECTIONS.map((s) => s.name) : [routeLabel ?? "ClearGate"];
+  const labels = onLanding ? SECTIONS.map((s) => s.name) : [routeLabel ?? "MACH402"];
   const position = onLanding ? index : 0;
 
   return (
@@ -162,9 +162,9 @@ export function Navigation() {
           <Link
             href="/"
             className="group pointer-events-auto flex items-baseline gap-2"
-            aria-label="ClearGate home"
+            aria-label="MACH402 home"
           >
-            <span className="type-wordmark">ClearGate</span>
+            <span className="type-wordmark">MACH402</span>
             {/*
              * Stated in the chrome of every page, because it changes what every
              * amount on the site means.

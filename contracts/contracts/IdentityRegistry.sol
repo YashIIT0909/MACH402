@@ -2,16 +2,16 @@
 pragma solidity ^0.8.24;
 
 /**
- * IdentityRegistry — ERC-8004 style identity for ClearGate providers.
+ * IdentityRegistry — ERC-8004 style identity for MACH402 providers.
  *
  * A provider registers once and gets a persistent `agentId`. That id answers
  * "who is this provider", and nothing else: GPU model, price and availability
- * change every thirty seconds and live in the ClearGate registry, not here.
+ * change every thirty seconds and live in the MACH402 registry, not here.
  * Putting them on-chain would mean a transaction per heartbeat for information
  * that is stale by the time it confirms.
  *
  * What the id buys is a claim our own registry cannot forge. Registration is
- * bound to `msg.sender`, so ClearGate cannot mint an identity for a provider,
+ * bound to `msg.sender`, so MACH402 cannot mint an identity for a provider,
  * transfer one, or revoke one — which is the only reason it is worth being
  * on-chain rather than another column in our Postgres.
  *

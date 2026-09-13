@@ -35,7 +35,7 @@ export const HBAR_ASSET_ID = "0.0.0";
 /** 1 HBAR = 100,000,000 tinybars. Amounts are strings end to end — never floats. */
 export const TINYBARS_PER_HBAR = 100_000_000n;
 
-/** The scheme ClearGate settles with. */
+/** The scheme MACH402 settles with. */
 export const SCHEME_EXACT = "exact";
 
 /**

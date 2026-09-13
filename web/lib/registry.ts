@@ -27,7 +27,7 @@ export async function fetchNodes(): Promise<NodesResult> {
  * Tinybars to HBAR for display only.
  *
  * The string is split rather than divided: amounts are never parsed into floats
- * anywhere in ClearGate, and this is no exception just because it is a label.
+ * anywhere in MACH402, and this is no exception just because it is a label.
  */
 export function hbar(tinybars: string): string {
   const padded = tinybars.padStart(9, "0");

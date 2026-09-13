@@ -56,7 +56,7 @@ func New(command, keyPath, network, mirrorURL string) *Sidecar {
 func (s *Sidecar) Available() error {
 	if _, err := exec.LookPath(s.command); err != nil {
 		return fmt.Errorf(
-			"%s not found on PATH; install it with `pnpm install` in the ClearGate checkout, "+
+			"%s not found on PATH; install it with `pnpm install` in the MACH402 checkout, "+
 				"or point hedera.sidecar at it: %w", s.command, err)
 	}
 	return nil

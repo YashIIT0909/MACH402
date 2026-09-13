@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
+	"github.com/YashIIT0909/MACH402/agent/internal/sshca"
 )
 
 // A lease sends nothing of the renter's to the provider: the renter gets a shell

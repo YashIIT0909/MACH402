@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/hcs"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
 )
 
 // recordingAudit stands in for the provider's HCS topic.

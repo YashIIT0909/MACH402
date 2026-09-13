@@ -80,5 +80,5 @@ function clientFor(network: string): Client {
   }
   // Mainnet is out of scope (CLAUDE.md, "Deliberately out of scope"), so this
   // is reachable only by a caller passing a network this build does not sell on.
-  throw new Error(`ClearGate does not pay on ${network}; this build is testnet only`);
+  throw new Error(`MACH402 does not pay on ${network}; this build is testnet only`);
 }

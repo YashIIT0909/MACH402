@@ -45,7 +45,7 @@ const atkinsonMono = Atkinson_Hyperlegible_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ClearGate — rent the machine, pay the machine",
+  title: "MACH402 — rent the machine, pay the machine",
   description: "Rent GPU time by the second, settled with x402 payments on Hedera testnet.",
 };
 

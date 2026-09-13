@@ -29,7 +29,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
 )
 
 // Target is where the tunnel should currently point: the addresses of the one

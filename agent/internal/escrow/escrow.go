@@ -34,7 +34,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/mirror"
+	"github.com/YashIIT0909/MACH402/agent/internal/mirror"
 )
 
 // Verifier reads sessions and deposits from the chain.

@@ -1,4 +1,4 @@
-# sshd for a ClearGate lease container.
+# sshd for a MACH402 lease container.
 #
 # There is no authorized_keys file here, and there never will be. Access is
 # granted entirely by certificate: the node's own CA signs the renter's public

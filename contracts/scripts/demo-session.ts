@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
- * Proves the whole money story against the live contract, with no ClearGate
+ * Proves the whole money story against the live contract, with no MACH402
  * node involved: open a session, top it up, stop early, and check that the
  * provider was paid for the seconds actually used and the renter got the rest
  * back.
@@ -62,7 +62,7 @@ function deployedEscrow(): string {
 
 async function main(): Promise<void> {
     const [renter] = await ethers.getSigners();
-    if (!renter) throw new Error("no signer: set HEDERA_PRIVATE_KEY in ClearGate/.env");
+    if (!renter) throw new Error("no signer: set HEDERA_PRIVATE_KEY in MACH402/.env");
 
     // The provider in this demo is PAY_TO_ACCOUNT_ID, the same account a real
     // node would be paid at.
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     // `evm_address` is the form that can actually be paid, which is why the node
     // resolves pay_to the same way.
     const payTo = process.env["PAY_TO_ACCOUNT_ID"];
-    if (!payTo) throw new Error("set PAY_TO_ACCOUNT_ID in ClearGate/.env");
+    if (!payTo) throw new Error("set PAY_TO_ACCOUNT_ID in MACH402/.env");
     const providerAddress = await resolveEvmAddress(payTo);
 
     const escrow = await ethers.getContractAt("SessionEscrow", deployedEscrow());

@@ -1,7 +1,7 @@
 /**
  * Step 3 of the payment spike: pay for the resource and prove it settled.
  *
- * All Hedera signing in ClearGate lives on this side. The agent never holds a
+ * All Hedera signing in MACH402 lives on this side. The agent never holds a
  * key (CLAUDE.md invariant 1), so this file is the reference for `client/src/payment.ts`.
  */
 import { PrivateKey } from "@hiero-ledger/sdk";

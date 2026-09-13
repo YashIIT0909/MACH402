@@ -1,4 +1,4 @@
-# ClearGate
+# MACH402
 
 A GPU rental marketplace settled with [x402](https://docs.hedera.com/solutions/ai/x402) payments on
 Hedera. Providers run a daemon on an idle GPU; renters — people at a terminal or autonomous agents —
@@ -128,8 +128,8 @@ provider can audit earnings without trusting any website.
 Requires Node 22+, pnpm 10, Go 1.25+, and Docker.
 
 ```sh
-git clone https://github.com/YashIIT0909/ClearGate
-cd ClearGate
+git clone https://github.com/YashIIT0909/MACH402
+cd MACH402
 pnpm install
 cp .env.example .env      # then fill it in
 ```

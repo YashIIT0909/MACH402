@@ -53,7 +53,7 @@ export type HederaSigner = {
  * default `x402Client` only permits assets its `findDefaultAsset` recognizes —
  * on Hedera that is testnet USDC (0.0.429274) and nothing else — capped at $1.
  * Native HBAR ("0.0.0") is not a recognized default asset, so a stock client
- * refuses to pay a ClearGate challenge with no network call and no clear error.
+ * refuses to pay a MACH402 challenge with no network call and no clear error.
  *
  * Rather than disabling spend controls outright, this registers an explicit
  * policy: HBAR only, on the expected network, below the renter's own cap. That

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
 )
 
 // corsServer builds the minimum Server needed to exercise the middleware. The

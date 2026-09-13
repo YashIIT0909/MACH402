@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 // collectPayment runs the 402-challenge-then-verify half of every paid endpoint.
@@ -129,7 +129,7 @@ func (s *Server) buildChallenge(r *http.Request, reason, amount, description str
 		Network:           s.cfg.Network,
 		MaxTimeoutSeconds: s.cfg.MaxTimeoutSeconds,
 		Description:       description,
-		ServiceName:       "ClearGate",
+		ServiceName:       "MACH402",
 		MimeType:          "application/json",
 	}, s.resourceURL(r), reason)
 }

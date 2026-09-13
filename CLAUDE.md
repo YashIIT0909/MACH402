@@ -4,7 +4,7 @@ Context for AI assistants working in this repo. Read this before writing code.
 
 ## What this is
 
-**ClearGate** — a GPU rental marketplace settled with x402 payments on Hedera. Providers run a daemon on an idle GPU and get listed; renters (people or agents) pay that node directly, by the second, for a container on it — and get back whatever credit they do not use.
+**MACH402** — a GPU rental marketplace settled with x402 payments on Hedera. Providers run a daemon on an idle GPU and get listed; renters (people or agents) pay that node directly, by the second, for a container on it — and get back whatever credit they do not use.
 
 Built for the "AI & Agentic Payments on Hedera" hackathon track. Testnet only.
 
@@ -116,9 +116,9 @@ Hedera docs' examples):
   "error": "Payment required",
   "resource": {
     "url": "https://node.example/v1/sessions",
-    "description": "300 seconds of interactive GPU time on ClearGate node node_xxxx",
+    "description": "300 seconds of interactive GPU time on MACH402 node node_xxxx",
     "mimeType": "application/json",
-    "serviceName": "ClearGate"
+    "serviceName": "MACH402"
   },
   "accepts": [{
     "scheme": "exact",
@@ -145,7 +145,7 @@ Hedera docs' examples):
 **Client spend controls reject HBAR by default.** `x402Client` permits only assets its
 `findDefaultAsset` recognizes — on Hedera that is testnet USDC (`0.0.429274`) and nothing else —
 capped at `DEFAULT_MAX_AMOUNT_PER_PAYMENT` of `"$1"`. Native HBAR (`"0.0.0"`) is not recognized, so
-a stock client silently refuses to pay a ClearGate challenge with no network call and no obvious
+a stock client silently refuses to pay a MACH402 challenge with no network call and no obvious
 error. `client/src/payment.ts` calls `setSpendControls(false)` and then registers its own explicit
 policy (HBAR, expected network, under the renter's cap). If a payment appears to do nothing at all,
 check this first.
@@ -233,7 +233,7 @@ Reaching the container is `internal/tunnel`, and it has one mode: a Cloudflare *
 therefore always false; it stays in the spec so older clients keep parsing it. The `named` and `off`
 modes were removed, and a config still naming either is refused at load.
 
-There are no Cloudflare credentials anywhere in ClearGate: the registry provisions nothing, and a
+There are no Cloudflare credentials anywhere in MACH402: the registry provisions nothing, and a
 provider needs only the `cloudflared` binary.
 
 ## The session lifecycle — metered, refundable interactive time
@@ -314,7 +314,7 @@ every thirty seconds and live in the registry, where they cost nothing to update
 - **It is idempotent at two levels — config and chain.** `register` checks `identity.agent_id`, and
   the contract's `agentIdOf` is checked before minting. A provider who lost their `config.yaml`
   recovers their id instead of silently acquiring a second one and orphaning the first.
-- **`newAgent` binds to `msg.sender`.** ClearGate cannot mint an identity for a provider, move one,
+- **`newAgent` binds to `msg.sender`.** MACH402 cannot mint an identity for a provider, move one,
   or revoke one. That is the only reason it is worth being on-chain rather than another column in
   our Postgres — and it is why the registry records an agent id without pretending to verify it.
 - **`agentDomain` is the host of `public_url`, and the node serves the card there** at

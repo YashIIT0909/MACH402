@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
-	"github.com/YashIIT0909/ClearGate/agent/internal/registry"
-	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
-	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/httpapi"
+	"github.com/YashIIT0909/MACH402/agent/internal/registry"
+	"github.com/YashIIT0909/MACH402/agent/internal/sshca"
+	"github.com/YashIIT0909/MACH402/agent/internal/tunnel"
 )
 
 func newServeCommand() *cobra.Command {

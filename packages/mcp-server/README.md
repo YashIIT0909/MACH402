@@ -1,7 +1,7 @@
 # @mach402/mcp-server
 
 An MCP (Model Context Protocol) server that lets an AI agent shop for, pay for, and use a metered
-GPU session on the ClearGate marketplace entirely on its own — no human running a CLI command, no
+GPU session on the MACH402 marketplace entirely on its own — no human running a CLI command, no
 human clicking through a website. It only ever opens **metered sessions** (pay a chunk → burn
 credit second by second → refund whatever's unused): every node on this network sells that and
 nothing else — there are no flat-fee jobs and no unrefundable "direct" leases to worry about.
@@ -41,7 +41,7 @@ there is **no SSH** on the current build; connection details are a Jupyter link 
 - Node.js 18+
 - Your own funded Hedera **testnet** account — get one free at https://portal.hedera.com. This is
   the only key this server ever holds, and it never leaves your machine.
-- A ClearGate/mach402 registry to search (your own local one, or one a provider gave you).
+- A MACH402/mach402 registry to search (your own local one, or one a provider gave you).
 
 ## Configuration
 

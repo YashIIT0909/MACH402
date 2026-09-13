@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
 )
 
 // chromeLines is what the header, tab strip and footer cost, and so what every
@@ -89,7 +89,7 @@ func (m *Model) statusBar(width int) string {
 
 	left := fmt.Sprintf("%s %s  %s  %s",
 		styleAccent.Render("◆"),
-		styleTitle.Render("ClearGate"),
+		styleTitle.Render("MACH402"),
 		m.cfg.NodeID,
 		state)
 
@@ -186,7 +186,7 @@ func (m *Model) helpView(width int) string {
 	lines := func(rows ...string) []string { return rows }
 
 	var b strings.Builder
-	b.WriteString(" " + styleTitle.Render("ClearGate — provider dashboard") + "\n\n")
+	b.WriteString(" " + styleTitle.Render("MACH402 — provider dashboard") + "\n\n")
 
 	b.WriteString(indent(cardRow(width-2, card{"screens", lines(
 		kv("1 Overview", "earnings, this machine, and who can reach it"),
