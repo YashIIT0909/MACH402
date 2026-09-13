@@ -1,5 +1,5 @@
 import { HeroSection } from "@/components/landing/hero-section";
-import { FeaturesSection } from "@/components/landing/features-section";
+import { McpSection } from "@/components/landing/mcp-section";
 import { HowItWorksSection } from "@/components/landing/how-it-works-section";
 import { DevelopersSection } from "@/components/landing/developers-section";
 import { GradientWaves } from "@/components/landing/gradient-waves";
@@ -52,7 +52,7 @@ export default function HomePage() {
       </div>
 
       <HeroSection />
-      <FeaturesSection />
+      <McpSection />
       <HowItWorksSection />
       <DevelopersSection />
     </>
