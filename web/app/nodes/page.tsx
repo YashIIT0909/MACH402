@@ -20,10 +20,7 @@ export default async function NodesPage() {
           result.ok ? `${result.nodes.length} listed · ${online} online` : "Registry unreachable"
         }
         title="Nodes"
-      >
-        Everything a node has announced about itself. Payment goes to the account in the last
-        column, directly — the registry records where nodes are and nothing else.
-      </PageHero>
+      />
 
       <section className="py-16 lg:py-24">
         <div className={CONTAINER}>

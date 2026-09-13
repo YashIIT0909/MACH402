@@ -39,17 +39,17 @@ export function FooterSection() {
       </div>
 
       <div className={`relative z-10 ${CONTAINER}`}>
-        <div className="py-16 lg:py-24">
-          <div className="grid grid-cols-2 gap-12 md:grid-cols-6 lg:gap-8">
+        <div className="py-10 lg:py-12">
+          <div className="grid grid-cols-2 gap-8 md:grid-cols-6 lg:gap-8">
             <div className="col-span-2">
-              <Link href="/" className="mb-6 inline-flex items-center gap-2">
+              <Link href="/" className="mb-4 inline-flex items-center gap-2">
                 <span className="type-wordmark">ClearGate</span>
                 <span className="type-label text-muted-foreground">
                   testnet
                 </span>
               </Link>
 
-              <p className="mb-8 max-w-xs leading-relaxed text-muted-foreground">
+              <p className="mb-5 max-w-xs text-sm leading-relaxed text-muted-foreground">
                 Rent an idle GPU by the second, settled with x402 payments on Hedera. Renters pay the
                 node directly.
               </p>
@@ -74,8 +74,8 @@ export function FooterSection() {
 
             {Object.entries(footerLinks).map(([title, links]) => (
               <div key={title}>
-                <h3 className="mb-6 text-sm font-medium">{title}</h3>
-                <ul className="space-y-4">
+                <h3 className="mb-3 text-sm font-medium">{title}</h3>
+                <ul className="space-y-2">
                   {links.map((link) => (
                     <li key={link.name}>
                       {link.external ? (
@@ -103,46 +103,29 @@ export function FooterSection() {
           </div>
         </div>
 
-        <div className="flex flex-col items-center justify-between gap-4 border-t border-foreground/10 py-8 md:flex-row">
-          {/* The load-bearing sentence on this whole site. */}
-          <p className="text-sm text-muted-foreground">
-            Payments settle renter → node. This site never touches the money.
+        <div className="border-t border-foreground/10 py-4">
+          {/*
+           * A licence condition, not a courtesy: the hero model is CC-BY-4.0,
+           * which requires visible credit naming the work, its author and the
+           * licence. Do not remove this without removing the model.
+           */}
+          <p className="font-mono text-xs text-muted-foreground/70">
+            GPU model{" "}
+            <a
+              href="https://sketchfab.com/3d-models/geforce-rtx-3080-graphics-card-8b947ee1bf7a4e3d8ffa1c24893ac160"
+              className="transition-colors hover:text-foreground"
+            >
+              “GeForce RTX 3080”
+            </a>{" "}
+            by{" "}
+            <a href="https://sketchfab.com/samuelsurovic" className="transition-colors hover:text-foreground">
+              _surovic_
+            </a>
+            ,{" "}
+            <a href="https://creativecommons.org/licenses/by/4.0/" className="transition-colors hover:text-foreground">
+              CC BY 4.0
+            </a>
           </p>
-
-          <div className="flex flex-col items-center gap-2 font-mono text-sm text-muted-foreground md:items-end">
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-accent" />
-              Hedera testnet · not mainnet money
-            </span>
-            {/*
-             * A licence condition, not a courtesy: the hero model is CC-BY-4.0,
-             * which requires visible credit naming the work, its author and the
-             * licence. Do not remove this without removing the model.
-             */}
-            <span className="text-xs">
-              GPU model{" "}
-              <a
-                href="https://sketchfab.com/3d-models/geforce-rtx-3080-graphics-card-8b947ee1bf7a4e3d8ffa1c24893ac160"
-                className="transition-colors hover:text-foreground"
-              >
-                “GeForce RTX 3080”
-              </a>{" "}
-              by{" "}
-              <a
-                href="https://sketchfab.com/samuelsurovic"
-                className="transition-colors hover:text-foreground"
-              >
-                _surovic_
-              </a>
-              ,{" "}
-              <a
-                href="https://creativecommons.org/licenses/by/4.0/"
-                className="transition-colors hover:text-foreground"
-              >
-                CC BY 4.0
-              </a>
-            </span>
-          </div>
         </div>
       </div>
     </footer>
