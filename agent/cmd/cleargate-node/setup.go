@@ -166,6 +166,11 @@ func setup(ctx context.Context, opts setupOptions) error {
 	cfg.Leases.CAKeyPath = filepath.Join(configDir, "lease-ca")
 	cfg.Hedera.OperatorKeyPath = filepath.Join(configDir, "hedera-operator")
 
+	// config.Default() leaves SessionChunkSeconds at its zero sentinel; Load()
+	// resolves it via ApplyDefaults before validating, and setup must do the
+	// same or every fresh node fails validation before it can be created.
+	cfg.ApplyDefaults(configDir)
+
 	if err := cfg.ValidateForSetup(); err != nil {
 		return err
 	}

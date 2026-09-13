@@ -449,13 +449,21 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	cfg.Leases.applyDefaults(filepath.Dir(path))
-	cfg.Hedera.applyDefaults(filepath.Dir(path))
-	cfg.CORS.applyDefaults()
+	cfg.ApplyDefaults(filepath.Dir(path))
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// ApplyDefaults fills in anything a hand-written, older, or freshly-created
+// config left unset. Load calls this after parsing a config file; setup must
+// call it too, since it builds a Config in memory and validates it without
+// ever going through Load.
+func (cfg *Config) ApplyDefaults(configDir string) {
+	cfg.Leases.applyDefaults(configDir)
+	cfg.Hedera.applyDefaults(configDir)
+	cfg.CORS.applyDefaults()
 }
 
 // applyDefaults fills in anything a hand-written or older `leases:` block left
