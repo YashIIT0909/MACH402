@@ -1,4 +1,4 @@
-# The ClearGate website, as deployed. Build from the repo root:
+# The MACH402 website, as deployed. Build from the repo root:
 #
 #   docker build -f web/Dockerfile -t cleargate-web .
 #

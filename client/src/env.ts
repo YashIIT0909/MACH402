@@ -1,5 +1,5 @@
 /**
- * Renter-side environment. This is the only side of ClearGate that holds a key.
+ * Renter-side environment. This is the only side of MACH402 that holds a key.
  *
  * The key is read from the environment, never from a config file, never written
  * to disk and never logged — see CLAUDE.md, "Secrets".

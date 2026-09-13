@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
+	"github.com/YashIIT0909/MACH402/agent/internal/hedera"
 )
 
 // Message kinds.
@@ -50,7 +50,7 @@ const (
 //
 // It mirrors receipts.Receipt, plus the session fields escrow adds, so the
 // public trail and the local log can be compared line for line. Amounts stay
-// strings, like everywhere else in ClearGate.
+// strings, like everywhere else in MACH402.
 type AuditMessage struct {
 	Kind      string `json:"kind"`
 	NodeID    string `json:"node_id"`

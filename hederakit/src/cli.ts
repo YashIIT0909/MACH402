@@ -52,7 +52,7 @@ async function connect(options: GlobalOptions) {
 
 const program = new Command()
     .name("cleargate-hedera")
-    .description("Hedera signing sidecar for the ClearGate provider node")
+    .description("Hedera signing sidecar for the MACH402 provider node")
     .version("0.1.0")
     .requiredOption("-k, --key-file <path>", "node-local operator key file")
     .option("-n, --network <network>", "hedera:testnet | hedera:mainnet", "hedera:testnet")

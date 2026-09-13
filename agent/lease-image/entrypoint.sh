@@ -48,7 +48,7 @@ fi
 
 cat > /etc/motd <<MOTD
 
-  ClearGate lease ${LEASE_ID:-}
+  MACH402 lease ${LEASE_ID:-}
   paid until ${LEASE_EXPIRES_AT:-unknown}
 
   GPU: ${gpu_note}

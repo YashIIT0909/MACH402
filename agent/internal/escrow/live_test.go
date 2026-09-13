@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/mirror"
+	"github.com/YashIIT0909/MACH402/agent/internal/mirror"
 )
 
 // The ABI decoding in this package is hand-written against a struct layout, and

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/hcs"
-	"github.com/YashIIT0909/ClearGate/agent/internal/hedera"
-	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/hcs"
+	"github.com/YashIIT0909/MACH402/agent/internal/hedera"
+	"github.com/YashIIT0909/MACH402/agent/internal/httpapi"
 )
 
 // newSidecar builds the handle to the `cleargate-hedera` child process.

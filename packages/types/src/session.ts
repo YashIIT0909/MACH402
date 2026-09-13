@@ -16,7 +16,7 @@
  * provider who later refuses to refund has already signed and ordered, on
  * consensus, the number they are refusing to honour.
  *
- * Every amount here is a string in tinybars, like everywhere else in ClearGate.
+ * Every amount here is a string in tinybars, like everywhere else in MACH402.
  * Never parse one into a float.
  *
  * These types are mirrored field for field by Go structs in

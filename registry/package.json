@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Discovery for ClearGate nodes. Never receives, holds or forwards funds.",
+  "description": "Discovery for MACH402 nodes. Never receives, holds or forwards funds.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",

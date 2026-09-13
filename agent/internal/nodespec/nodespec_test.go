@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/nodespec"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
 )
 
 // The registry validates every one of these and rejects a heartbeat missing

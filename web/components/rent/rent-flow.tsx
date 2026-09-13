@@ -33,7 +33,7 @@ export function RentFlow({ node }: { node: NodeListing }) {
 
   if (offer.payment_mode !== "session") {
     return (
-      <Notice title="This node runs an older ClearGate build">
+      <Notice title="This node runs an older MACH402 build">
         It still sells prepaid minutes with no refund, which this site no longer buys. Sessions here
         are metered by the second and refund whatever you do not use, so this node becomes rentable
         once its provider updates.

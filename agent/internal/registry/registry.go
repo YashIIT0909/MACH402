@@ -1,4 +1,4 @@
-// Package registry announces this node to the ClearGate registry so it appears
+// Package registry announces this node to the MACH402 registry so it appears
 // on the website.
 //
 // The registry is discovery only. It never receives, holds or forwards funds
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/nodespec"
+	"github.com/YashIIT0909/MACH402/agent/internal/nodespec"
 )
 
 // Interval is how often a node re-announces itself. The registry marks a node

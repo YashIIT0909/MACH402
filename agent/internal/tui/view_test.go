@@ -11,12 +11,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
-	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
-	"github.com/YashIIT0909/ClearGate/agent/internal/registry"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/httpapi"
+	"github.com/YashIIT0909/MACH402/agent/internal/receipts"
+	"github.com/YashIIT0909/MACH402/agent/internal/registry"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 // The dashboard has to survive terminals that are much narrower and much

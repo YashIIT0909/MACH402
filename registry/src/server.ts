@@ -1,5 +1,5 @@
 /**
- * The ClearGate registry: discovery, and nothing else.
+ * The MACH402 registry: discovery, and nothing else.
  *
  * Every route here is free and unauthenticated except the heartbeat, which a
  * node authorizes with its own listing token. The registry never receives,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The provider one-liner: fetch ClearGate, build the node daemon, configure
+# The provider one-liner: fetch MACH402, build the node daemon, configure
 # it, and start selling GPU time.
 #
 # The website hands out this exact form — it works with no prior checkout:
@@ -9,7 +9,7 @@
 #   PUBLIC_URL=http://1.2.3.4:8402 \
 #   REGISTRY_URL=http://localhost:4400 \
 #   LEASE_PRICE_TINYBARS_PER_MINUTE=200000 \
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/YashIIT0909/ClearGate/main/scripts/install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/YashIIT0909/MACH402/main/scripts/install.sh)"
 #
 # It also works run in place as ./scripts/install.sh from an existing
 # checkout (what a developer does), in which case it reuses that checkout
@@ -51,8 +51,8 @@ LEASE_BASE_IMAGE="${LEASE_BASE_IMAGE:-}"
 # copied from older docs working.
 
 CONFIG="${CONFIG:-config.yaml}"
-CLEARGATE_REPO="${CLEARGATE_REPO:-https://github.com/YashIIT0909/ClearGate.git}"
-CLEARGATE_DIR="${CLEARGATE_DIR:-$HOME/.cleargate/ClearGate}"
+CLEARGATE_REPO="${CLEARGATE_REPO:-https://github.com/YashIIT0909/MACH402.git}"
+CLEARGATE_DIR="${CLEARGATE_DIR:-$HOME/.cleargate/MACH402}"
 
 if [[ -z "$PAY_TO" ]]; then
   echo "PAY_TO is required — the Hedera testnet account your earnings are paid into." >&2
@@ -156,7 +156,7 @@ elif [[ -d "$CLEARGATE_DIR/.git" ]]; then
   git -C "$CLEARGATE_DIR" pull --ff-only
   repo_root="$CLEARGATE_DIR"
 else
-  echo "==> cloning ClearGate into $CLEARGATE_DIR"
+  echo "==> cloning MACH402 into $CLEARGATE_DIR"
   git clone --depth 1 "$CLEARGATE_REPO" "$CLEARGATE_DIR"
   repo_root="$CLEARGATE_DIR"
 fi

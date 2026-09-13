@@ -5,7 +5,7 @@ import type { SessionEscrow } from "../typechain-types";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 /**
- * The settle math is the only place in ClearGate where money is divided rather
+ * The settle math is the only place in MACH402 where money is divided rather
  * than simply moved, so it is tested against the in-process EVM where the clock
  * can be advanced exactly. Every case below corresponds to something a renter
  * or provider can actually do.

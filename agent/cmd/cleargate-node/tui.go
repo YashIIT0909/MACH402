@@ -12,8 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/receipts"
-	"github.com/YashIIT0909/ClearGate/agent/internal/tui"
+	"github.com/YashIIT0909/MACH402/agent/internal/receipts"
+	"github.com/YashIIT0909/MACH402/agent/internal/tui"
 )
 
 func newTUICommand() *cobra.Command {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
 )
 
 // activityView is the node's running commentary: every payment, every lease

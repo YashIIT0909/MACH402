@@ -1,4 +1,4 @@
-# Deploying ClearGate
+# Deploying MACH402
 
 Two servers, one command each.
 
@@ -31,8 +31,8 @@ server's Docker network, and the website only through its Caddy.
 ## 1. Registry server
 
 ```sh
-git clone https://github.com/YashIIT0909/ClearGate.git
-cd ClearGate/deploy/registry
+git clone https://github.com/YashIIT0909/MACH402.git
+cd MACH402/deploy/registry
 cp .env.example .env
 ```
 
@@ -60,8 +60,8 @@ curl https://api.example.com/v1/nodes     # {"nodes":[],...}
 ## 2. Web server
 
 ```sh
-git clone https://github.com/YashIIT0909/ClearGate.git
-cd ClearGate/deploy/web
+git clone https://github.com/YashIIT0909/MACH402.git
+cd MACH402/deploy/web
 cp .env.example .env
 ```
 

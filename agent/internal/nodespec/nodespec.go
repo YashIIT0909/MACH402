@@ -6,9 +6,9 @@
 package nodespec
 
 import (
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/escrow"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
 )
 
 // Spec mirrors NodeSpec in packages/types. Changing it is a cross-team break.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/mirror"
+	"github.com/YashIIT0909/MACH402/agent/internal/mirror"
 )
 
 // PricePerSecond converts a per-minute lease price into the per-second figure
@@ -19,7 +19,7 @@ import (
 // rate with no error anywhere.
 //
 // math/big rather than int64 for the same reason leasePrice uses it: tinybar
-// amounts are strings end to end in ClearGate and a price that overflows is a
+// amounts are strings end to end in MACH402 and a price that overflows is a
 // bug that silently undercharges.
 func PricePerSecond(tinybarsPerMinute string) (*big.Int, error) {
 	perMinute, ok := new(big.Int).SetString(tinybarsPerMinute, 10)

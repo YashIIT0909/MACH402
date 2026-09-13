@@ -1,4 +1,4 @@
-# The ClearGate registry, as deployed. Build from the repo root:
+# The MACH402 registry, as deployed. Build from the repo root:
 #
 #   docker build -f registry/Dockerfile -t cleargate-registry .
 #

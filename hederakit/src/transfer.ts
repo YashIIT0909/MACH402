@@ -29,7 +29,7 @@ export interface RefundResult {
 /**
  * Sends `tinybars` from the operator's account to `to`.
  *
- * Amounts stay strings the whole way, like everywhere else in ClearGate: the
+ * Amounts stay strings the whole way, like everywhere else in MACH402: the
  * SDK's Hbar.from* helpers take a Long, and going through a JavaScript number
  * would silently round a tinybar figure above 2^53.
  */

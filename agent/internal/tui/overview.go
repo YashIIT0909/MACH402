@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/escrow"
+	"github.com/YashIIT0909/MACH402/agent/internal/escrow"
 )
 
 // overviewView answers the four questions a provider opens this dashboard to

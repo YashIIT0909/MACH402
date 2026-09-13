@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
 )
 
 // legacyJobLabel marks containers and volumes made by builds that also sold

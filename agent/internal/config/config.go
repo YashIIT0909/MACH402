@@ -47,7 +47,7 @@ type Config struct {
 	// Empty means derive it from the incoming request.
 	PublicURL string `yaml:"public_url"`
 
-	// RegistryURL is the ClearGate registry this node announces itself to, so
+	// RegistryURL is the MACH402 registry this node announces itself to, so
 	// it appears on the website. Empty means "do not announce": a node is fully
 	// functional unlisted, and renters who know its URL can still pay it.
 	RegistryURL string `yaml:"registry_url"`
@@ -90,7 +90,7 @@ type Config struct {
 
 	// CORS governs which web origins a browser may call this node from.
 	//
-	// Needed because a renter paying from the ClearGate website is a browser
+	// Needed because a renter paying from the MACH402 website is a browser
 	// talking straight to this node — payments are renter -> node, direct
 	// (CLAUDE.md invariant 3), so there is no server in between to relay them.
 	CORS CORS `yaml:"cors"`
@@ -293,7 +293,7 @@ type LeaseLimits struct {
 //
 // A renter has to be able to `pip install`, so a container with no network at
 // all is not an option. Instead lease containers sit on an internal Docker network with no route
-// out and reach the world only through a ClearGate-built proxy that denies by
+// out and reach the world only through a MACH402-built proxy that denies by
 // default. A renter with a live shell can unset HTTP_PROXY, but there is
 // nothing behind it: the network itself has no path off the host.
 type Egress struct {

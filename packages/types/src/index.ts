@@ -1,5 +1,5 @@
 /**
- * ClearGate shared types — the cross-component contract.
+ * MACH402 shared types — the cross-component contract.
  *
  * The x402 wire types are re-exported from `@x402/core/types` rather than
  * redeclared, so a facilitator or SDK change surfaces as a compile error

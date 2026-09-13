@@ -5,7 +5,7 @@ import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signer
 
 /**
  * The point of putting identity on-chain rather than in our Postgres is that
- * ClearGate cannot mint, move or revoke one. Most of these tests exist to prove
+ * MACH402 cannot mint, move or revoke one. Most of these tests exist to prove
  * that property rather than to check the happy path.
  */
 describe("IdentityRegistry", () => {
@@ -48,7 +48,7 @@ describe("IdentityRegistry", () => {
   });
 
   it("refuses to register an identity on someone else's behalf", async () => {
-    // This is the load-bearing check: it is what stops ClearGate — or anyone —
+    // This is the load-bearing check: it is what stops MACH402 — or anyone —
     // from minting identities for providers and then speaking for them.
     await expect(
       registry.connect(providerA).newAgent(DOMAIN, providerB.address),

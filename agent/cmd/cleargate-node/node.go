@@ -6,13 +6,13 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
-	"github.com/YashIIT0909/ClearGate/agent/internal/httpapi"
-	"github.com/YashIIT0909/ClearGate/agent/internal/registry"
-	"github.com/YashIIT0909/ClearGate/agent/internal/runner"
-	"github.com/YashIIT0909/ClearGate/agent/internal/sshca"
-	"github.com/YashIIT0909/ClearGate/agent/internal/tunnel"
-	"github.com/YashIIT0909/ClearGate/agent/internal/x402"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/httpapi"
+	"github.com/YashIIT0909/MACH402/agent/internal/registry"
+	"github.com/YashIIT0909/MACH402/agent/internal/runner"
+	"github.com/YashIIT0909/MACH402/agent/internal/sshca"
+	"github.com/YashIIT0909/MACH402/agent/internal/tunnel"
+	"github.com/YashIIT0909/MACH402/agent/internal/x402"
 )
 
 // node is a fully wired node — everything `serve` and `tui` both need.

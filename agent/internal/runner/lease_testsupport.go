@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/YashIIT0909/ClearGate/agent/internal/config"
+	"github.com/YashIIT0909/MACH402/agent/internal/config"
 )
 
 func secondsDuration(seconds int64) time.Duration {

@@ -1,4 +1,4 @@
-# ClearGate — Current State
+# MACH402 — Current State
 
 A snapshot of what is built, what is wired together, and what is still open. For onboarding and
 setup, see `README.md`; for the invariants that must never be violated, see `CLAUDE.md`. This file

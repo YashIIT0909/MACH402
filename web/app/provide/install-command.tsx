@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 // vendored, so a provider always gets the current script without needing a
 // checkout of their own first.
 const INSTALL_SCRIPT_URL =
-  "https://raw.githubusercontent.com/YashIIT0909/ClearGate/main/scripts/install.sh";
+  "https://raw.githubusercontent.com/YashIIT0909/MACH402/main/scripts/install.sh";
 
 /**
  * Builds the provider's install command.
@@ -87,7 +87,7 @@ export function InstallCommand({ registryUrl }: { registryUrl: string }) {
           Run this on the machine with the GPU
         </span>
         <p className="mb-8 text-sm text-muted-foreground">
-          One command. It clones ClearGate, builds the node, checks Docker and the GPU, and starts it.
+          One command. It clones MACH402, builds the node, checks Docker and the GPU, and starts it.
         </p>
 
         <div className="border border-foreground/10">

@@ -1,10 +1,10 @@
-# Testing ClearGate
+# Testing MACH402
 
 Every step below has a command, the output that means it passed, and what it actually proves. The
 free steps cost nothing at all; each paid one says what it costs on
 testnet.
 
-Two terminals: **A** runs the provider node, **B** is the renter. **Every command below runs from the repo root** (`ClearGate/`) — none of them want you inside `client/` or `agent/`. `make: *** No rule to make target 'smoke'` means only that you are in the wrong directory.
+Two terminals: **A** runs the provider node, **B** is the renter. **Every command below runs from the repo root** (`MACH402/`) — none of them want you inside `client/` or `agent/`. `make: *** No rule to make target 'smoke'` means only that you are in the wrong directory.
 
 Prerequisites: Node 22+, pnpm 10, Go 1.25+, Docker running, and a funded `.env`.
 
@@ -38,7 +38,7 @@ make supported
 **Pass:** a `hedera:testnet` kind is listed and a fee payer is printed (`0.0.7162784` today).
 
 This is the early-warning signal. If it fails, nothing downstream can settle and the problem is not
-in ClearGate. The fee payer is read at runtime and never hardcoded, so a change here is absorbed
+in MACH402. The fee payer is read at runtime and never hardcoded, so a change here is absorbed
 automatically — but it should be *seen*.
 
 ## 2b. Turn the GPU on — operator steps, free

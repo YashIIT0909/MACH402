@@ -7,7 +7,7 @@
 // anywhere in this binary — see CLAUDE.md invariant 1.
 package x402
 
-// Version is the x402 protocol version ClearGate speaks.
+// Version is the x402 protocol version MACH402 speaks.
 const Version = 2
 
 // HTTP header names. x402 v2 renamed these; the X-PAYMENT pair is v1 and is
@@ -45,7 +45,7 @@ type ResourceInfo struct {
 // PaymentRequirements is one way a client may pay for a resource.
 //
 // Amount is a decimal string in the asset's smallest unit — tinybars for HBAR.
-// It is never parsed into a float anywhere in ClearGate.
+// It is never parsed into a float anywhere in MACH402.
 type PaymentRequirements struct {
 	Scheme            string         `json:"scheme"`
 	Network           string         `json:"network"`
