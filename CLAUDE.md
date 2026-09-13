@@ -256,9 +256,20 @@ second by second, and owes back whatever is unburned. It is the only way interac
   repeatedly at a time when they had no motive to shade it. Because this is what makes prepaying a
   stranger checkable at all, `hcs.enabled` is **required** for session mode and refused at config
   load, not warned about at runtime.
-- **The chunk cap bounds the exposure.** `leases.session_chunk_seconds` (default 300) is the most
-  time one payment ever buys, whatever the renter asked for; they get a chunk and top up. Widening
-  it widens the only real gap in this design, so it is not a performance knob.
+- **The chunk cap bounds the exposure, and it now defaults to the whole session.**
+  `leases.session_chunk_seconds` is the most time one payment ever buys, whatever the renter asked
+  for. It used to default to 300, so a renter got a chunk and topped up; it now defaults to
+  `max_minutes`, so one payment buys the session outright and no top-up fires. The reason is that
+  every chunk is a separate wallet prompt — a half-hour session was six of them, arriving
+  unannounced with a minute of runway before the container froze — and a renter dismissing a prompt
+  they did not expect is a worse failure than the exposure the cap was bounding. Be honest about
+  what was given up: the provider now holds the whole session's money until the refund, and nothing
+  but the burn checkpoints on HCS says how much of it is still the renter's. A provider who wants
+  the narrower window sets the field explicitly and gets exactly the old behaviour, top-ups
+  included — the machinery is all still there.
+  - **This raises what the operator key must hold.** It has to cover a refund of a whole session
+    now, not a chunk of one. `setup` already warns when the operator balance is under one chunk;
+    that warning is simply worth more attention than it was.
 - **The renter chooses the session length, and the session ends there.** `seconds` on
   `POST /v1/sessions` (within `min_minutes`/`max_minutes`) is stored as the session length. It is
   still paid in chunks: a top-up buys at most what is left of it and is refused once it is paid

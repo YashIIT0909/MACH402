@@ -400,10 +400,15 @@ func DefaultLeases() Leases {
 		// turning it on is what brings the operator key refunds are paid from.
 		PaymentMode: PaymentSession,
 
-		// Five minutes. Long enough that a renter is not paying every few
-		// seconds, short enough that the money a provider is holding ahead of
-		// the compute is a few tenths of a cent rather than an hour's rental.
-		SessionChunkSeconds: 300,
+		// Zero, meaning "as much as this node sells" — applyDefaults resolves
+		// it to max_minutes, so one payment covers a whole session and no
+		// top-up ever fires. It used to be a flat five minutes, which bounded
+		// how much of a renter's money a provider held ahead of the compute,
+		// but every chunk is a separate wallet prompt: a half-hour session was
+		// six of them, arriving unannounced with a minute of runway before the
+		// container froze. A provider who would rather have the narrower
+		// exposure sets this explicitly and gets exactly the old behaviour.
+		SessionChunkSeconds: 0,
 
 		// A minute of runway. The meter ticks every 15s and a payment round
 		// trip is a couple of seconds, so this leaves several chances to top up
@@ -518,8 +523,12 @@ func (l *Leases) applyDefaults(configDir string) {
 	if l.PaymentMode == PaymentEscrow {
 		l.PaymentMode = PaymentSession
 	}
+	// Derived from this node's own maximum, not from a constant: a chunk is a
+	// cap on one payment, so a chunk as long as the longest session it sells
+	// means every session is bought outright. MaxMinutes is already defaulted
+	// above, so this is never reading a zero.
 	if l.SessionChunkSeconds <= 0 {
-		l.SessionChunkSeconds = fallback.SessionChunkSeconds
+		l.SessionChunkSeconds = l.MaxMinutes * 60
 	}
 	if l.LowCreditThresholdSeconds <= 0 {
 		l.LowCreditThresholdSeconds = fallback.LowCreditThresholdSeconds
