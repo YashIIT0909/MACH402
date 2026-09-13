@@ -1,0 +1,7 @@
+# SITE_ADDRESS is REGISTRY_DOMAIN from .env. A domain name (api.example.com)
+# gets a Let's Encrypt certificate automatically; the default ":80" serves plain
+# HTTP, which is only for trying the stack out before DNS is set up.
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy registry:4400
+}
