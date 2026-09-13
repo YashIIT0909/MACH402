@@ -43,11 +43,30 @@ export function loadConfig(): McpConfig {
     );
   }
 
+  const maxTinybarsPerPayment =
+    readBigIntEnv("CLEARGATE_MAX_TINYBARS_PER_PAYMENT") ?? DEFAULT_MAX_TINYBARS_PER_PAYMENT;
+  const confirmAboveTinybars = readBigIntEnv("CLEARGATE_CONFIRM_ABOVE_TINYBARS");
+
+  // confirmAboveTinybars is meant to sit *below* the hard per-payment cap — "pause
+  // and ask before spending this much, out of a ceiling that's never crossed at
+  // all." If it's set above the cap instead, any quote in between is too big to
+  // pay directly and never big enough to trigger confirmation either: it always
+  // fails, confirmed or not. Catching that here turns a mysterious runtime
+  // payment rejection into a clear misconfiguration error at startup.
+  if (confirmAboveTinybars !== null && confirmAboveTinybars > maxTinybarsPerPayment) {
+    throw new Error(
+      `CLEARGATE_CONFIRM_ABOVE_TINYBARS (${confirmAboveTinybars}) must not exceed ` +
+        `CLEARGATE_MAX_TINYBARS_PER_PAYMENT (${maxTinybarsPerPayment}) — otherwise a payment priced ` +
+        `between the two can never go through, confirmed or not. Raise ` +
+        `CLEARGATE_MAX_TINYBARS_PER_PAYMENT to at least that much, or lower the confirmation threshold.`,
+    );
+  }
+
   return {
     registryUrl,
     network: process.env["HEDERA_NETWORK"] ?? "hedera:testnet",
-    maxTinybarsPerPayment: readBigIntEnv("CLEARGATE_MAX_TINYBARS_PER_PAYMENT") ?? DEFAULT_MAX_TINYBARS_PER_PAYMENT,
+    maxTinybarsPerPayment,
     maxTinybarsPerDay: readBigIntEnv("CLEARGATE_MAX_TINYBARS_PER_DAY"),
-    confirmAboveTinybars: readBigIntEnv("CLEARGATE_CONFIRM_ABOVE_TINYBARS"),
+    confirmAboveTinybars,
   };
 }

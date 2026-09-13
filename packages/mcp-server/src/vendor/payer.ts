@@ -124,7 +124,7 @@ export async function payFor(
   if (!response.ok) {
     const body = await response.text();
     throw new PaymentError(
-      `${init?.method ?? "GET"} ${url} failed: ${response.status} ${response.statusText}`,
+      `${init?.method ?? "GET"} ${url} failed: ${response.status} ${response.statusText}${describeBody(body)}`,
       response.status,
       body,
     );
@@ -147,4 +147,21 @@ export async function payFor(
   }
 
   return { response, settlement };
+}
+
+/**
+ * Pulls the node's `{"error": "..."}` reason out of a failure body, if there
+ * is one, so a rejected payment says *why* instead of just its status code —
+ * "insufficient balance" and "wrong network" both show up as a bare 402
+ * otherwise, and there is no way to tell them apart without this.
+ */
+function describeBody(body: string): string {
+  if (!body) return "";
+  try {
+    const parsed = JSON.parse(body) as { error?: string; invalidReason?: string; errorReason?: string };
+    const detail = parsed.error ?? parsed.invalidReason ?? parsed.errorReason;
+    return detail ? `: ${detail}` : "";
+  } catch {
+    return body.length > 0 ? `: ${body.slice(0, 300)}` : "";
+  }
 }
